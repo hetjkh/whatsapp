@@ -1,26 +1,33 @@
 "use client";
 
-import { useState, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { X, Plus, FileText, Bold, Italic, Strikethrough, List, Quote, Code, Eye, Edit, Trash, Upload, Link } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { X, Plus, FileText, Bold, Italic, Strikethrough, List, Quote, Code, Eye, Edit, Trash, Link } from 'lucide-react';
+import Cookies from 'js-cookie';
+import { useRouter } from 'next/navigation';
+import { Toaster, toast } from 'react-hot-toast';
+import { Loader2 } from 'lucide-react';
 
 interface Button {
   name: string;
-  type: 'quick reply button' | 'call button' | 'url button' | 'unsubscibe button';
+  type: 'REPLY' | 'URL' | 'PHONE_NUMBER' | 'UNSUBSCRIBE';
+  url?: string;
 }
 
 interface Template {
-  id: string;
+  _id?: string;
   name: string;
   messageType: string;
-  message: string;
-  mediaUrl?: string;
-  mediaFile?: File;
-  buttons?: Button[];
-  footer?: string;
+  template: {
+    header?: string;
+    message: string;
+    footer?: string;
+    button?: Button[];
+  };
 }
 
 export default function Templates() {
@@ -30,41 +37,105 @@ export default function Templates() {
   const [message, setMessage] = useState('');
   const [templates, setTemplates] = useState<Template[]>([]);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
-  const [mediaOption, setMediaOption] = useState<'gallery' | 'url'>('gallery');
-  const [mediaUrl, setMediaUrl] = useState('');
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
-  const [buttons, setButtons] = useState<Button[]>([{ name: '', type: 'quick_reply' }]);
+  const [buttons, setButtons] = useState<Button[]>([{ name: '', type: 'REPLY' }]);
+  const [header, setHeader] = useState('');
   const [footer, setFooter] = useState('');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<{ [key: string]: boolean }>({});
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalTemplates, setTotalTemplates] = useState(0);
+  const templatesPerPage = 10;
   const editorRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
+  const [isPreviewOpen, setIsPreviewOpen] = useState(false);
+  const [previewContent, setPreviewContent] = useState('');
+
+  const fetchTemplates = async () => {
+    const token = Cookies.get('token');
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/all', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ page: currentPage, limit: templatesPerPage }),
+      });
+      const data = await response.json();
+      if (data.status) {
+        const validTemplates = (data.templates || []).filter(
+          (template: Template) => template && template._id
+        );
+        setTemplates(validTemplates);
+        setTotalTemplates(data.total || 0);
+        console.log('Fetched templates:', data.templates);
+      } else {
+        toast.error(data.message || 'Failed to fetch templates');
+      }
+    } catch (err) {
+      toast.error('Error fetching templates: ' + err.message);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchTemplates();
+  }, [router, currentPage]);
+
+  const totalPages = Math.ceil(totalTemplates / templatesPerPage);
+
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1);
+    }
+  };
+
+  const handlePreviousPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
+  };
+
+  const initializeEditorContent = useCallback((content: string) => {
+    if (editorRef.current) {
+      editorRef.current.innerText = content;
+      setMessage(content);
+    }
+  }, []);
 
   const handleOpenModal = (template?: Template) => {
     if (template) {
       setEditingTemplate(template);
-      setTemplateName(template.name);
-      setMessageType(template.messageType);
-      setMessage(template.message);
-      setMediaUrl(template.mediaUrl || '');
-      setMediaFile(template.mediaFile || null);
-      setButtons(template.buttons || [{ name: '', type: 'quick_reply' }]);
-      setFooter(template.footer || '');
-      setMediaOption(template.mediaUrl ? 'url' : 'gallery');
-      if (editorRef.current) {
-        editorRef.current.innerText = template.message;
-      }
+      setTemplateName(template.name || '');
+      setMessageType(template.messageType || '');
+      setMessage(template.template.message || '');
+      setButtons(
+        template.template.button?.map(btn => ({
+          name: btn.name || btn.title || '',
+          type: btn.type as 'REPLY' | 'URL' | 'PHONE_NUMBER' | 'UNSUBSCRIBE',
+          url: btn.url,
+        })) || [{ name: '', type: 'REPLY' }]
+      );
+      setHeader(template.messageType === 'Buttons' ? template.template.header || '' : '');
+      setFooter(template.messageType === 'Buttons' ? template.template.footer || '' : '');
+      initializeEditorContent(template.template.message || '');
     } else {
       setEditingTemplate(null);
       setTemplateName('');
       setMessageType('');
       setMessage('');
-      setMediaUrl('');
-      setMediaFile(null);
-      setButtons([{ name: '', type: 'quick_reply' }]);
+      setButtons([{ name: '', type: 'REPLY' }]);
+      setHeader('');
       setFooter('');
-      setMediaOption('gallery');
-      if (editorRef.current) {
-        editorRef.current.innerText = '';
-      }
+      initializeEditorContent('');
     }
     setIsModalOpen(true);
   };
@@ -74,39 +145,76 @@ export default function Templates() {
     setTemplateName('');
     setMessageType('');
     setMessage('');
-    setMediaOption('gallery');
-    setMediaUrl('');
-    setMediaFile(null);
-    setButtons([{ name: '', type: 'quick_reply' }]);
+    setButtons([{ name: '', type: 'REPLY' }]);
+    setHeader('');
     setFooter('');
     setEditingTemplate(null);
     if (editorRef.current) {
       editorRef.current.innerText = '';
     }
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newTemplate: Template = {
-      id: editingTemplate ? editingTemplate.id : Math.random().toString(36).substr(2, 9),
-      name: templateName,
-      messageType,
-      message: editorRef.current?.innerText || '',
-      mediaUrl: messageType.includes('media') && mediaOption === 'url' ? mediaUrl : undefined,
-      mediaFile: messageType.includes('media') && mediaOption === 'gallery' ? mediaFile || undefined : undefined,
-      buttons: ['buttons', 'button_with_media'].includes(messageType) ? buttons.filter(btn => btn.name.trim() !== '') : undefined,
-      footer: footer || undefined,
-    };
-
-    if (editingTemplate) {
-      setTemplates(templates.map(t => (t.id === editingTemplate.id ? newTemplate : t)));
-    } else {
-      setTemplates([...templates, newTemplate]);
+    const token = Cookies.get('token');
+    if (!token) {
+      router.push('/login');
+      return;
     }
-    handleCloseModal();
+
+    setIsSubmitting(true);
+    try {
+      const payload = {
+        name: templateName,
+        messageType,
+        template: {
+          ...(messageType === 'Buttons' && { header: header || undefined }),
+          message: editorRef.current?.innerText || '',
+          ...(messageType === 'Buttons' && { footer: footer || undefined }),
+          ...(messageType === 'Buttons' && {
+            button: buttons
+              .filter(btn => btn.name.trim() !== '')
+              .map(btn => ({
+                type: btn.type,
+                title: btn.name,
+                ...(btn.type === 'URL' && { url: btn.url }),
+              })),
+          }),
+        },
+      };
+
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+
+      if (data.status && data.data) {
+        if (editingTemplate && editingTemplate._id) {
+          setTemplates(templates.map(t => (t._id === editingTemplate._id ? data.data : t)));
+          toast.success('Template updated successfully');
+        } else {
+          if (data.data._id) {
+            setCurrentPage(1);
+            await fetchTemplates();
+            toast.success('Template created successfully');
+          } else {
+            toast.error('Created template missing _id');
+          }
+        }
+        handleCloseModal();
+      } else {
+        toast.error(data.message || 'Failed to save template');
+      }
+    } catch (err) {
+      toast.error('Error saving template: ' + err.message);
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const applyFormatting = (format: string) => {
@@ -194,123 +302,227 @@ export default function Templates() {
     }
   };
 
-  const handleDelete = (id: string) => {
-    setTemplates(templates.filter(t => t.id !== id));
+  const handleDelete = async (id: string) => {
+    const token = Cookies.get('token');
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+
+    setIsDeleting(prev => ({ ...prev, [id]: true }));
+    try {
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/delete', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ templateId: id }),
+      });
+      const data = await response.json();
+
+      if (data.status) {
+        setTemplates(templates.filter(t => t._id !== id));
+        setTotalTemplates(totalTemplates - 1);
+        toast.success(data.message || 'Template deleted successfully');
+      } else {
+        toast.error(data.message || 'Failed to delete template');
+      }
+    } catch (err) {
+      toast.error('Error deleting template: ' + err.message);
+    } finally {
+      setIsDeleting(prev => ({ ...prev, [id]: false }));
+    }
   };
 
   const handlePreview = (template: Template) => {
-    let message = `Message:\n${template.message}`;
-    if (template.mediaUrl) {
-      message += `\nMedia URL: ${template.mediaUrl}`;
-    } else if (template.mediaFile) {
-      message += `\nMedia File: ${template.mediaFile.name}`;
+    let content = `Message:\n${template.template.message || 'N/A'}`;
+    if (template.messageType === 'Buttons') {
+      if (template.template.header) {
+        content = `Header: ${template.template.header}\n${content}`;
+      }
+      if (template.template.button && template.template.button.length > 0) {
+        content += `\nButtons:\n${template.template.button.map((btn, idx) => `Button ${idx + 1}: ${btn.title || btn.name || 'N/A'} (${btn.type})${btn.url ? ` - URL: ${btn.url}` : ''}`).join('\n')}`;
+      }
+      if (template.template.footer) {
+        content += `\nFooter: ${template.template.footer}`;
+      }
     }
-    if (template.buttons && template.buttons.length > 0) {
-      message += `\nButtons:\n${template.buttons.map((btn, idx) => `Button ${idx + 1}: ${btn.name} (${btn.type})`).join('\n')}`;
-    }
-    if (template.footer) {
-      message += `\nFooter: ${template.footer}`;
-    }
-    alert(message);
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setMediaFile(file);
-    }
+    setPreviewContent(content);
+    setIsPreviewOpen(true);
   };
 
   const handleButtonChange = (index: number, field: keyof Button, value: string) => {
     const newButtons = [...buttons];
     newButtons[index] = { ...newButtons[index], [field]: value };
+    if (field === 'type' && value !== 'URL') {
+      delete newButtons[index].url;
+    }
     setButtons(newButtons);
   };
 
   const addButton = () => {
-    setButtons([...buttons, { name: '', type: 'quick_reply' }]);
+    setButtons([...buttons, { name: '', type: 'REPLY' }]);
+  };
+
+  const handleVariableSelect = (value: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+
+    const range = selection.getRangeAt(0);
+    const placeholder = value === 'name' ? '{{name}}' : value === 'number' ? '{{number}}' : `{{var${value.split(' ')[1]}}}`;
+    range.insertNode(document.createTextNode(placeholder));
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    setMessage(editor.innerText);
   };
 
   return (
-    <div className="space-y-8 p-6">
+    <div className="space-y-8 p-8">
+      <Toaster position="top-right" toastOptions={{ 
+        duration: 3000,
+        style: {
+          background: '#333',
+          color: '#fff',
+          borderRadius: '8px',
+          padding: '16px',
+        },
+      }} />
       <div className="flex justify-between items-center">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-200">Templates</h1>
-          <p className="text-zinc-400 mt-2">Manage your message templates</p>
+          <h1 className="text-3xl font-bold text-zinc-200">Templates</h1>
+          <p className="text-zinc-400 mt-2 text-lg">Manage your message templates</p>
         </div>
         <Button
           onClick={() => handleOpenModal()}
-          className="bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+          className="bg-zinc-800 text-zinc-200 hover:bg-zinc-700 px-6 py-3 text-base"
+          disabled={isLoading}
         >
-          <Plus className="h-4 w-4 mr-2" />
+          <Plus className="h-5 w-5 mr-2" />
           Add Template
         </Button>
       </div>
 
-      {templates.length > 0 ? (
-        <Card className="bg-black border-zinc-800 p-6">
-          <Table>
-            <TableHeader>
-              <TableRow className="border-zinc-800">
-                <TableHead className="text-zinc-400">ID</TableHead>
-                <TableHead className="text-zinc-400">Name</TableHead>
-                <TableHead className="text-zinc-400">Message Type</TableHead>
-                <TableHead className="text-zinc-400">Message</TableHead>
-                <TableHead className="text-zinc-400">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {templates.map(template => (
-                <TableRow key={template.id} className="border-zinc-800">
-                  <TableCell className="text-zinc-200">{template.id}</TableCell>
-                  <TableCell className="text-zinc-200">{template.name}</TableCell>
-                  <TableCell className="text-zinc-200">{template.messageType}</TableCell>
-                  <TableCell className="text-zinc-200">
-                    <Button
-                      variant="ghost"
-                      onClick={() => handlePreview(template)}
-                      className="text-zinc-400 hover:text-zinc-200"
-                    >
-                      <Eye className="h-4 w-4 mr-2" />
-                      Preview
-                    </Button>
-                  </TableCell>
-                  <TableCell className="text-zinc-200">
-                    <div className="flex gap-2">
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleOpenModal(template)}
-                        className="text-zinc-400 hover:text-zinc-200"
-                      >
-                        <Edit className="h-4 w-4 mr-2" />
-                        Edit
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        onClick={() => handleDelete(template.id)}
-                        className="text-zinc-400 hover:text-zinc-200"
-                      >
-                        <Trash className="h-4 w-4 mr-2" />
-                        Delete
-                      </Button>
-                    </div>
-                  </TableCell>
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="flex flex-col items-center gap-4">
+            <Loader2 className="h-12 w-12 text-blue-500 animate-spin" />
+            <p className="text-zinc-400 text-lg">Loading templates...</p>
+          </div>
+        </div>
+      ) : templates.length > 0 ? (
+        <>
+          <Card className="bg-black border-zinc-800 p-8">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-zinc-800">
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">ID</TableHead>
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Name</TableHead>
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Message Type</TableHead>
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Message</TableHead>
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Actions</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Card>
+              </TableHeader>
+              <TableBody>
+                {templates.map(template => (
+                  <TableRow key={template._id || Math.random().toString()} className="border-zinc-800">
+                    <TableCell className="text-zinc-200 py-4">{template._id || 'N/A'}</TableCell>
+                    <TableCell className="text-zinc-200 py-4">{template.name || 'Unnamed'}</TableCell>
+                    <TableCell className="text-zinc-200 py-4">{template.messageType || 'N/A'}</TableCell>
+                    <TableCell className="text-zinc-200 py-4">
+                      <Button
+                        variant="ghost"
+                        onClick={() => handlePreview(template)}
+                        className="text-zinc-400 hover:text-zinc-200 text-base"
+                      >
+                        <Eye className="h-5 w-5 mr-2" />
+                        Preview
+                      </Button>
+                    </TableCell>
+                    <TableCell className="text-zinc-200 py-4">
+                      <div className="flex gap-4">
+                        <Button
+                          variant="ghost"
+                          onClick={() => handleOpenModal(template)}
+                          className="text-zinc-400 hover:text-zinc-200 text-base"
+                          disabled={isDeleting[template._id || ''] || !template._id}
+                        >
+                          <Edit className="h-5 w-5 mr-2" />
+                          Edit
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          onClick={() => template._id && handleDelete(template._id)}
+                          className="text-zinc-400 hover:text-zinc-200 text-base"
+                          disabled={isDeleting[template._id || ''] || !template._id}
+                        >
+                          {isDeleting[template._id || ''] ? (
+                            <Loader2 className="h-5 w-5 animate-spin" />
+                          ) : (
+                            <Trash className="h-5 w-5 mr-2" />
+                          )}
+                          Delete
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Card>
+          <div className="flex justify-between items-center mt-6">
+            <p className="text-zinc-400 text-lg">
+              Showing {(currentPage - 1) * templatesPerPage + 1} to{' '}
+              {Math.min(currentPage * templatesPerPage, totalTemplates)} of {totalTemplates} templates
+            </p>
+            <div className="flex gap-4">
+              <Button
+                variant="outline"
+                onClick={handlePreviousPage}
+                disabled={currentPage === 1 || isLoading}
+                className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 px-6 py-3 text-base"
+              >
+                Previous
+              </Button>
+              <Button
+                variant="outline"
+                onClick={handleNextPage}
+                disabled={currentPage === totalPages || isLoading}
+                className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 px-6 py-3 text-base"
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </>
       ) : (
-        <Card className="bg-black border-zinc-800 p-6">
-          <p className="text-zinc-400 text-center">No templates available. Add a template to get started.</p>
+        <Card className="bg-black border-zinc-800 p-8">
+          <p className="text-zinc-400 text-center text-lg">No templates available. Add a template to get started.</p>
         </Card>
       )}
 
+      <Dialog open={isPreviewOpen} onOpenChange={setIsPreviewOpen}>
+        <DialogContent className="bg-black border-zinc-800 text-zinc-200 max-w-lg p-8 rounded-lg">
+          <DialogHeader>
+            <DialogTitle className="text-2xl font-semibold">Template Preview</DialogTitle>
+          </DialogHeader>
+          <DialogDescription className="text-zinc-400 text-lg leading-relaxed whitespace-pre-wrap mt-4">
+            {previewContent}
+          </DialogDescription>
+        </DialogContent>
+      </Dialog>
+
       {isModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <Card className="bg-black border-zinc-800 p-8 w-full max-w-4xl h-[80vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-6">
-              <h2 className="text-2xl font-semibold text-zinc-200">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <Card className="bg-black border-zinc-800 p-8 w-full max-w-4xl max-h-[90vh] overflow-y-auto rounded-lg">
+            <div className="flex justify-between items-center mb-8">
+              <h2 className="text-2xl font-semibold text-white">
                 {editingTemplate ? 'Edit Template' : 'Create New Template'}
               </h2>
               <Button
@@ -318,52 +530,90 @@ export default function Templates() {
                 onClick={handleCloseModal}
                 className="text-zinc-400 hover:text-zinc-200"
               >
-                <X className="h-5 w-5" />
+                <X className="h-6 w-6" />
               </Button>
             </div>
-            <form onSubmit={handleSubmit} className="space-y-6">
-              <div className="grid gap-3">
-                <label className="text-base font-medium text-zinc-400">Title</label>
-                <div className="relative">
-                  <FileText className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
-                  <Input
-                    className="pl-10 bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base"
-                    placeholder="Enter template name"
-                    value={templateName}
-                    onChange={(e) => setTemplateName(e.target.value)}
-                  />
+            <form onSubmit={handleSubmit} className="space-y-8">
+              <div className="flex flex-col sm:flex-row gap-6">
+                <div className="flex-1">
+                  <label className="text-base font-medium text-zinc-400 mb-2 block">Title</label>
+                  <div className="relative">
+                    <FileText className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
+                    <Input
+                      className="pl-10 bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base rounded-md"
+                      placeholder="Enter template name"
+                      value={templateName}
+                      onChange={(e) => setTemplateName(e.target.value)}
+                    />
+                  </div>
+                </div>
+                <div className="flex-1">
+                  <label className Yisummary="text-base font-medium text-zinc-400 mb-2 block">Message Type</label>
+                  <div className="relative">
+                    <select
+                      className="w-full pl-10 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base"
+                      value={messageType}
+                      onChange={(e) => setMessageType(e.target.value)}
+                    >
+                      <option value="" disabled>Select message type</option>
+                      <option value="Text">Text</option>
+                      <option value="Buttons">Buttons</option>
+                    </select>
+                    <FileText className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
+                  </div>
                 </div>
               </div>
+              {messageType === 'Buttons' && (
+                <>
+                  <div className="grid gap-3">
+                    <label className="text-base font-medium text-zinc-400 mb-2 block">Header</label>
+                    <div className="relative">
+                      <FileText className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
+                      <Input
+                        className="pl-10 bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base rounded-md"
+                        placeholder="Enter header text"
+                        value={header}
+                        onChange={(e) => setHeader(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="grid gap-3">
+                    <label className="text-base font-medium text-zinc-400 mb-2 block">Footer</label>
+                    <div className="relative">
+                      <FileText className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
+                      <Input
+                        className="pl-10 bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base rounded-md"
+                        placeholder="Enter footer text"
+                        value={footer}
+                        onChange={(e) => setFooter(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
               <div className="grid gap-3">
-                <label className="text-base font-medium text-zinc-400">Message Type</label>
-                <div className="relative">
-                  <select
-                    className="w-full pl-10 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base"
-                    value={messageType}
-                    onChange={(e) => setMessageType(e.target.value)}
-                  >
-                    <option value="" disabled>Select message type</option>
-                    <option value="text">Text</option>
-                    <option value="text_with_media">Text with media</option>
-                    <option value="buttons">Buttons</option>
-                    <option value="button_with_media">Button with media</option>
-                    <option value="list">List</option>
-                    <option value="list_with_media">List with media</option>
-                    <option value="poll">Poll</option>
-                    <option value="poll_with_media">Poll with media</option>
-                  </select>
-                  <FileText className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
-                </div>
-              </div>
-              <div className="grid gap-3">
-                <label className="text-base font-medium text-zinc-400">Message</label>
-                <div className="space-y-3">
-                  <div className="flex gap-3">
+                <label className="text-base font-medium text-zinc-400 mb-2 block">Message</label>
+                <div className="space-y-4">
+                  <div className="flex gap-3 flex-wrap items-center">
+                    <select
+                      className="pl-3 pr-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-10 text-base"
+                      onChange={(e) => handleVariableSelect(e.target.value)}
+                      defaultValue=""
+                    >
+                      <option value="" disabled>Insert variable</option>
+                      <option value="name">Name</option>
+                      <option value="number">Number</option>
+                      {Array.from({ length: 10 }, (_, i) => (
+                        <option key={i} value={`variable ${i + 1}`}>
+                          Variable {i + 1}
+                        </option>
+                      ))}
+                    </select>
                     <Button
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('bold')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
                     >
                       <Bold className="h-5 w-5" />
                     </Button>
@@ -371,7 +621,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('italic')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
                     >
                       <Italic className="h-5 w-5" />
                     </Button>
@@ -379,7 +629,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('strikeThrough')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
                     >
                       <Strikethrough className="h-5 w-5" />
                     </Button>
@@ -387,7 +637,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('insertUnorderedList')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
                     >
                       <List className="h-5 w-5" />
                     </Button>
@@ -395,7 +645,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('formatBlock')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
                     >
                       <Quote className="h-5 w-5" />
                     </Button>
@@ -403,7 +653,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('code')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
                     >
                       <Code className="h-5 w-5" />
                     </Button>
@@ -411,161 +661,102 @@ export default function Templates() {
                   <div
                     ref={editorRef}
                     contentEditable
-                    className="bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md p-3 min-h-[150px] focus:outline-none focus:ring-2 focus:ring-zinc-700 text-base"
+                    className="bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md p-4 min-h-[200px] focus:outline-none focus:ring-2 focus:ring-zinc-700 text-lg"
                     onInput={handleInput}
                     style={{
                       whiteSpace: 'pre-wrap',
-                      fontSize: '16px',
+                      fontSize: '18px',
                     }}
                   />
                 </div>
               </div>
-
-              {['text_with_media', 'button_with_media', 'list_with_media', 'poll_with_media'].includes(messageType) && (
-                <div className="grid gap-3 bg-zinc-950 p-4 rounded-md">
-                  <label className="text-base font-medium text-zinc-400">Media</label>
-                  <div className="flex gap-3 mb-3">
-                    <Button
-                      type="button"
-                      variant={mediaOption === 'gallery' ? 'default' : 'outline'}
-                      onClick={() => setMediaOption('gallery')}
-                      className={
-                        mediaOption === 'gallery'
-                          ? 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10'
-                          : 'bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10'
-                      }
-                    >
-                      Gallery
-                    </Button>
-                    <Button
-                      type="button"
-                      variant={mediaOption === 'url' ? 'default' : 'outline'}
-                      onClick={() => setMediaOption('url')}
-                      className={
-                        mediaOption === 'url'
-                          ? 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10'
-                          : 'bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10'
-                      }
-                    >
-                      URL
-                    </Button>
-                  </div>
-                  {mediaOption === 'gallery' ? (
-                    <div className="flex items-center gap-3">
-                      <Input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*,video/*"
-                        onChange={handleFileChange}
-                        className="bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base"
-                      />
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
-                        disabled={!mediaFile}
-                      >
-                        <Upload className="h-5 w-5 mr-2" />
-                        Upload
-                      </Button>
-                    </div>
-                  ) : (
-                    <div className="relative">
-                      <Link className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
-                      <Input
-                        className="pl-10 bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base"
-                        placeholder="Enter media URL"
-                        value={mediaUrl}
-                        onChange={(e) => setMediaUrl(e.target.value)}
-                      />
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {['buttons', 'button_with_media'].includes(messageType) && (
-                <div className="grid gap-3 bg-zinc-950 p-4 rounded-md">
-                  <label className="text-base font-medium text-zinc-400">Footer</label>
-                  <div className="relative">
-                    <FileText className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
-                    <Input
-                      className="pl-10 bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base"
-                      placeholder="Enter footer text"
-                      value={footer}
-                      onChange={(e) => setFooter(e.target.value)}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {['buttons', 'button_with_media'].includes(messageType) && (
-                <div className="grid gap-3">
-                  <label className="text-base font-medium text-zinc-400">Buttons</label>
+              {messageType === 'Buttons' && (
+                <div className="grid gap-4">
+                  <label className="text-base font-medium text-zinc-400 mb-2 block">Buttons</label>
                   {buttons.map((button, index) => (
-                    <div key={index} className="bg-zinc-950 p-4 rounded-md space-y-3">
+                    <div key={index} className="bg-zinc-950 p-6 rounded-md space-y-4">
                       <h3 className="text-lg font-bold text-zinc-200">{`Button ${index + 1}`}</h3>
-                      <div className="flex gap-4 items-start">
+                      <div className="flex flex-col sm:flex-row gap-6 items-start">
                         <div className="flex-1">
-                          <label className="text-base font-medium text-zinc-400">Title</label>
+                          <label className="text-base font-medium text-zinc-400 mb-2 block">Title</label>
                           <Input
-                            className="bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base mt-2"
+                            className="bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base rounded-md"
                             placeholder={`Enter title for Button ${index + 1}`}
                             value={button.name}
                             onChange={(e) => handleButtonChange(index, 'name', e.target.value)}
                           />
                         </div>
                         <div className="flex-1">
-                          <label className="text-base font-medium text-zinc-400">Type</label>
+                          <label className="text-base font-medium text-zinc-400 mb-2 block">Type</label>
                           <select
-                            className="w-full pl-3 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base mt-2"
+                            className="w-full pl-3 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base"
                             value={button.type}
                             onChange={(e) => handleButtonChange(index, 'type', e.target.value as Button['type'])}
                           >
-                            <option value="quick_reply">Quick Reply</option>
-                            <option value="url">URL</option>
-                            <option value="phone_number">Phone Number</option>
+                            <option value="REPLY">Quick Reply</option>
+                            <option value="URL">URL</option>
+                            <option value="PHONE_NUMBER">Phone Number</option>
+                            <option value="UNSUBSCRIBE">Unsubscribe</option>
                           </select>
                         </div>
                       </div>
+                      {button.type === 'URL' && (
+                        <div className="flex-1">
+                          <label className="text-base font-medium text-zinc-400 mb-2 block">URL</label>
+                          <div className="relative">
+                            <Link className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
+                            <Input
+                              className="pl-10 bg-zinc-900 border-zinc-800 text-zinc-200 h-12 text-base rounded-md"
+                              placeholder="Enter URL"
+                              value={button.url || ''}
+                              onChange={(e) => handleButtonChange(index, 'url', e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                   <Button
                     type="button"
                     variant="outline"
                     onClick={addButton}
-                    className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 mt-3"
+                    className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-6 mt-4"
                   >
                     <Plus className="h-5 w-5 mr-2" />
                     Add Button
                   </Button>
                 </div>
               )}
-
-              <div className="flex justify-end gap-3 mt-6">
+              <div className="flex justify-end gap-4 mt-8">
                 <Button
                   type="button"
                   variant="outline"
                   onClick={handleCloseModal}
-                  className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10"
+                  className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-12 px-6 text-base"
+                  disabled={isSubmitting}
                 >
                   Cancel
                 </Button>
                 <Button
                   type="submit"
-                  className="bg-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10"
+                  className="bg-zinc-800 text-zinc-200 hover:bg-zinc-700 h-12 px-6 text-base"
                   disabled={
                     !templateName ||
                     !messageType ||
                     !editorRef.current?.innerText ||
-                    (messageType.includes('media') &&
-                      mediaOption === 'gallery' &&
-                      !mediaFile) ||
-                    (messageType.includes('media') && mediaOption === 'url' && !mediaUrl) ||
-                    (['buttons', 'button_with_media'].includes(messageType) &&
-                      buttons.every(btn => btn.name.trim() === ''))
+                    (messageType === 'Buttons' && buttons.every(btn => btn.name.trim() === '')) ||
+                    (messageType === 'Buttons' && buttons.some(btn => btn.type === 'URL' && !btn.url)) ||
+                    isSubmitting
                   }
                 >
-                  {editingTemplate ? 'Update Template' : 'Add Template'}
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                      {editingTemplate ? 'Updating...' : 'Creating...'}
+                    </>
+                  ) : (
+                    editingTemplate ? 'Update Template' : 'Add Template'
+                  )}
                 </Button>
               </div>
             </form>
