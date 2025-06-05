@@ -11,7 +11,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+idencia:1
 import Cookies from 'js-cookie';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -27,25 +27,38 @@ import {
   Loader2
 } from 'lucide-react';
 
+// Define interfaces for type safety
+interface WhatsAppProfile {
+  phone?: string | null;
+  status: string;
+  profile?: string | null;
+}
+
+interface Instance {
+  _id: string;
+  name?: string;
+  whatsapp: WhatsAppProfile;
+}
+
 export default function DevicesPage() {
-  const [instances, setInstances] = useState([]);
+  const [instances, setInstances] = useState<Instance[]>([]);
   const [showQR, setShowQR] = useState(false);
   const [qrCode, setQrCode] = useState('');
-  const [selectedInstanceId, setSelectedInstanceId] = useState(null);
+  const [selectedInstanceId, setSelectedInstanceId] = useState<string | null>(null);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
-  const [connectedInstance, setConnectedInstance] = useState(null);
+  const [connectedInstance, setConnectedInstance] = useState<Instance | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [instancesPerPage, setInstancesPerPage] = useState(9);
   const [showEditDialog, setShowEditDialog] = useState(false);
-  const [editInstanceId, setEditInstanceId] = useState(null);
+  const [editInstanceId, setEditInstanceId] = useState<string | null>(null);
   const [editInstanceName, setEditInstanceName] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
-  const [isProcessingQR, setIsProcessingQR] = useState({});
-  const [isProcessingLogout, setIsProcessingLogout] = useState({});
-  const [isProcessingDelete, setIsProcessingDelete] = useState({});
-  const [isProcessingEdit, setIsProcessingEdit] = useState({});
-  const [selectedInstance, setSelectedInstance] = useState(null);
+  const [isProcessingQR, setIsProcessingQR] = useState<{ [key: string]: boolean }>({});
+  const [isProcessingLogout, setIsProcessingLogout] = useState<{ [key: string]: boolean }>({});
+  const [isProcessingDelete, setIsProcessingDelete] = useState<{ [key: string]: boolean }>({});
+  const [isProcessingEdit, setIsProcessingEdit] = useState<{ [key: string]: boolean }>({});
+  const [selectedInstance, setSelectedInstance] = useState<Instance | null>(null);
 
   const router = useRouter();
 
@@ -75,7 +88,7 @@ export default function DevicesPage() {
           toast.error(data.message || 'Failed to fetch instances');
         }
       } catch (err) {
-        toast.error('Error fetching instances: ' + err.message);
+        toast.error('Error fetching instances: ');
       } finally {
         setIsLoading(false);
       }
@@ -84,9 +97,9 @@ export default function DevicesPage() {
     fetchInstances();
   }, [router]);
 
-  // Poll instance status after QR code is shown
+  // Poll instance status when QR is shown
   useEffect(() => {
-    let interval;
+    let interval: NodeJS.Timeout | undefined;
     if (showQR && selectedInstanceId) {
       interval = setInterval(async () => {
         const token = Cookies.get('token');
@@ -106,7 +119,7 @@ export default function DevicesPage() {
           });
           const data = await response.json();
           if (data.status) {
-            const updatedInstance = data.instances.find((inst) => inst._id === selectedInstanceId);
+            const updatedInstance = data.instances.find((inst: Instance) => inst._id === selectedInstanceId);
             if (updatedInstance && updatedInstance.whatsapp.status === 'connected') {
               setShowQR(false);
               setConnectedInstance(updatedInstance);
@@ -121,7 +134,9 @@ export default function DevicesPage() {
       }, 3000);
     }
 
-    return () => clearInterval(interval);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
   }, [showQR, selectedInstanceId, router]);
 
   // Handle Create Instance
@@ -158,7 +173,7 @@ export default function DevicesPage() {
   };
 
   // Handle Show QR
-  const handleShowQR = async (instanceId) => {
+  const handleShowQR = async (instanceId: string) => {
     const token = Cookies.get('token');
     if (!token) {
       router.push('/login');
@@ -192,7 +207,7 @@ export default function DevicesPage() {
   };
 
   // Handle Delete Instance
-  const handleDeleteInstance = async (instanceId) => {
+  const handleDeleteInstance = async (instanceId: string) => {
     const token = Cookies.get('token');
     if (!token) {
       router.push('/login');
@@ -222,14 +237,14 @@ export default function DevicesPage() {
         toast.error(data.message || 'Failed to delete instance');
       }
     } catch (err) {
-      toast.error('Error deleting instance: ' + err.message);
+      toast.error('Error deleting instance: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
       setIsProcessingDelete(prev => ({ ...prev, [instanceId]: false }));
     }
   };
 
   // Handle Logout Instance
-  const handleLogoutInstance = async (instanceId) => {
+  const handleLogoutInstance = async (instanceId: string) => {
     const token = Cookies.get('token');
     if (!token) {
       router.push('/login');
@@ -257,8 +272,8 @@ export default function DevicesPage() {
                   whatsapp: { 
                     ...instance.whatsapp, 
                     status: 'disconnected',
-                    phone: null, // Clear phone number
-                    profile: null // Clear profile picture
+                    phone: null,
+                    profile: null
                   } 
                 }
               : instance
@@ -269,7 +284,8 @@ export default function DevicesPage() {
         toast.error(data.message || 'Failed to log out');
       }
     } catch (err) {
-      toast.error('Error logging out: ' + err.message);
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
+      toast.error('Error logging out: ' + errorMessage);
     } finally {
       setIsProcessingLogout(prev => ({ ...prev, [instanceId]: false }));
     }
@@ -288,7 +304,7 @@ export default function DevicesPage() {
       return;
     }
 
-    setIsProcessingEdit(prev => ({ ...prev, [editInstanceId]: true }));
+    setIsProcessingEdit(prev => ({ ...prev, [editInstanceId!]: true }));
     try {
       const response = await fetch('https://whatsapp.recuperafly.com/api/instance/edit', {
         method: 'POST',
@@ -320,23 +336,23 @@ export default function DevicesPage() {
         toast.error(data.message || 'Failed to update instance name');
       }
     } catch (err) {
-      toast.error('Error updating instance name: ' + err.message);
+      toast.error('Error updating instance name: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
-      setIsProcessingEdit(prev => ({ ...prev, [editInstanceId]: false }));
+      setIsProcessingEdit(prev => ({ ...prev, [editInstanceId!]: false }));
     }
   };
 
   // Open Edit Dialog
-  const openEditDialog = (instanceId, currentName) => {
+  const openEditDialog = (instanceId: string, currentName: string | undefined) => {
     const instance = instances.find(inst => inst._id === instanceId);
     setEditInstanceId(instanceId);
     setEditInstanceName(currentName || '');
-    setSelectedInstance(instance);
+    setSelectedInstance(instance || null);
     setShowEditDialog(true);
   };
 
   // Handle Instances Per Page Change
-  const handleInstancesPerPageChange = (value) => {
+  const handleInstancesPerPageChange = (value: string) => {
     const newPerPage = parseInt(value, 10);
     setInstancesPerPage(newPerPage);
     setCurrentPage(1);
@@ -361,34 +377,34 @@ export default function DevicesPage() {
   };
 
   // Get status class
-  const getStatusClass = (status) => {
+  const getStatusClass = (status: string) => {
     switch (status) {
       case 'connected':
-        return 'bg-gradient-to-r from-emerald-600 to-emerald-400 text-white shadow-lg shadow-emerald-500/20';
+        return 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20';
       case 'disconnected':
-        return 'bg-gradient-to-r from-amber-600 to-amber-400 text-white shadow-lg shadow-amber-500/20';
+        return 'bg-red-500/10 text-red-500 border border-red-500/20';
       default:
-        return 'bg-gradient-to-r from-blue-600 to-blue-400 text-white shadow-lg shadow-blue-500/20';
+        return 'bg-zinc-500/10 text-zinc-500 border border-zinc-500/20';
     }
   };
 
   return (
-    <div className="space-y-8 p-6 max-w-7xl mx-auto">
+    <div className="space-y-8 p-6 max-w-7xl mx-auto bg-zinc-950">
       <Toaster position="top-right" toastOptions={{ 
         duration: 3000,
         style: {
-          background: '#333',
+          background: '#18181b',
           color: '#fff',
           borderRadius: '8px',
         },
       }} />
       
       <div className="flex justify-between items-center mb-8">
-        <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent">
+        <h1 className="text-3xl font-bold text-white">
           WhatsApp Devices
         </h1>
         <Button
-          className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium px-5 py-2 h-12 rounded-xl transition-all duration-300 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40"
+          className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-5 py-2 h-12 rounded-xl transition-all duration-300"
           onClick={handleCreateInstance}
           disabled={isCreating}
         >
@@ -409,7 +425,7 @@ export default function DevicesPage() {
       {isLoading ? (
         <div className="flex items-center justify-center h-64">
           <div className="flex flex-col items-center">
-            <Loader2 className="h-12 w-12 text-blue-500 animate-spin mb-4" />
+            <Loader2 className="h-12 w-12 text-zinc-500 animate-spin mb-4" />
             <p className="text-zinc-400">Loading instances...</p>
           </div>
         </div>
@@ -420,7 +436,7 @@ export default function DevicesPage() {
             <h3 className="text-xl font-semibold text-zinc-300 mb-2">No Devices Found</h3>
             <p className="text-zinc-500 mb-6 max-w-md">You don't have any WhatsApp instances yet. Create your first instance to get started.</p>
             <Button
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium px-5 h-12 rounded-xl transition-all duration-300 shadow-lg shadow-blue-500/20 hover:shadow-blue-500/40"
+              className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-5 h-12 rounded-xl transition-all duration-300"
               onClick={handleCreateInstance}
               disabled={isCreating}
             >
@@ -443,7 +459,7 @@ export default function DevicesPage() {
           {currentInstances.map((instance, index) => (
             <Card 
               key={instance._id} 
-              className="bg-zinc-900/80 border-zinc-800/80 hover:border-zinc-700/80 rounded-xl overflow-hidden transition-all duration-300 hover:shadow-lg hover:shadow-blue-900/10 group"
+              className="bg-zinc-900 border-zinc-800 hover:border-zinc-700 rounded-xl overflow-hidden transition-all duration-300"
             >
               <CardContent className="p-5">
                 <div className="flex items-center gap-4">
@@ -455,18 +471,18 @@ export default function DevicesPage() {
                         className="w-14 h-14 rounded-full object-cover border-2 border-zinc-700"
                       />
                       <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-2 border-zinc-900 ${
-                        instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                        instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-red-500'
                       }`}></div>
                     </div>
                   ) : (
                     <div className="relative">
-                      <div className="w-14 h-14 rounded-full bg-gradient-to-br from-zinc-800 to-zinc-700 flex items-center justify-center border-2 border-zinc-700">
+                      <div className="w-14 h-14 rounded-full bg-zinc-800 flex items-center justify-center border-2 border-zinc-700">
                         <span className="text-zinc-300 font-semibold">
                           {indexOfFirstInstance + index + 1}
                         </span>
                       </div>
                       <div className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full border-2 border-zinc-900 ${
-                        instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                        instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-red-500'
                       }`}></div>
                     </div>
                   )}
@@ -495,7 +511,7 @@ export default function DevicesPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1 bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border-amber-500/20 hover:border-amber-500/30 transition-all duration-300"
+                    className="flex-1 bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20 hover:border-red-500/30"
                     onClick={() => handleLogoutInstance(instance._id)}
                     disabled={isProcessingLogout[instance._id]}
                   >
@@ -512,7 +528,7 @@ export default function DevicesPage() {
                   <Button
                     size="sm"
                     variant="outline"
-                    className="flex-1 bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/20 hover:border-blue-500/30 transition-all duration-300"
+                    className="flex-1 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border-emerald-500/20 hover:border-emerald-500/30"
                     onClick={() => handleShowQR(instance._id)}
                     disabled={isProcessingQR[instance._id]}
                   >
@@ -529,7 +545,7 @@ export default function DevicesPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="flex-1 bg-zinc-800/50 hover:bg-zinc-800 text-zinc-300 border-zinc-700 transition-all duration-300"
+                  className="flex-1 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border-zinc-700"
                   onClick={() => openEditDialog(instance._id, instance.name)}
                   disabled={isProcessingEdit[instance._id]}
                 >
@@ -545,7 +561,7 @@ export default function DevicesPage() {
                 <Button
                   size="sm"
                   variant="outline"
-                  className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20 hover:border-red-500/30 transition-all duration-300"
+                  className="bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20 hover:border-red-500/30"
                   onClick={() => handleDeleteInstance(instance._id)}
                   disabled={isProcessingDelete[instance._id]}
                 >
@@ -563,28 +579,11 @@ export default function DevicesPage() {
 
       {/* Pagination Controls */}
       {instances.length > instancesPerPage && (
-        <div className="flex justify-between items-center mt-8 bg-zinc-900/50 border border-zinc-800 rounded-xl p-4">
+        <div className="flex justify-between items-center mt-8 bg-zinc-900 border border-zinc-800 rounded-xl p-4">
           <div className="flex items-center gap-3">
             <span className="text-zinc-400 text-sm">
               Showing {indexOfFirstInstance + 1}-{Math.min(indexOfLastInstance, instances.length)} of {instances.length} instances
             </span>
-            <div className="flex items-center bg-zinc-800 rounded-md overflow-hidden">
-              <Select
-                value={instancesPerPage.toString()}
-                onValueChange={handleInstancesPerPageChange}
-              >
-                <SelectTrigger className="w-20 border-0 bg-transparent focus:ring-0 focus:ring-offset-0 text-zinc-300">
-                  <SelectValue placeholder="Per page" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="6">6</SelectItem>
-                  <SelectItem value="9">9</SelectItem>
-                  <SelectItem value="12">12</SelectItem>
-                  <SelectItem value="18">18</SelectItem>
-                </SelectContent>
-              </Select>
-              <span className="text-xs text-zinc-500 pr-2">per page</span>
-            </div>
           </div>
           
           <div className="flex items-center">
@@ -610,7 +609,7 @@ export default function DevicesPage() {
                   onClick={() => setCurrentPage(page)}
                   className={`h-9 w-9 rounded-full transition-all duration-200 ${
                     currentPage === page
-                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      ? 'bg-zinc-800 text-white hover:bg-zinc-700'
                       : 'bg-transparent hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
                   }`}
                   aria-label={`Page ${page}`}
@@ -655,36 +654,36 @@ export default function DevicesPage() {
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center h-[300px] w-[300px]">
-                  <Loader2 className="h-10 w-10 text-blue-500 animate-spin mb-4" />
+                  <Loader2 className="h-10 w-10 text-zinc-500 animate-spin mb-4" />
                   <p className="text-zinc-400">Generating QR code...</p>
                 </div>
               )}
             </div>
             <div className="flex-1">
               <div className="space-y-6">
-                <div className="bg-blue-900/20 border border-blue-900/30 rounded-lg p-6">
-                  <h3 className="text-lg font-semibold text-blue-400 mb-4">How to Connect</h3>
+                <div className="bg-zinc-800/50 border border-zinc-800 rounded-lg p-6">
+                  <h3 className="text-lg font-semibold text-zinc-200 mb-4">How to Connect</h3>
                   <div className="space-y-4">
                     <div className="flex items-start gap-3">
-                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 text-sm">1</div>
-                      <p className="text-blue-300">Open WhatsApp on your phone</p>
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center text-zinc-300 text-sm">1</div>
+                      <p className="text-zinc-300">Open WhatsApp on your phone</p>
                     </div>
                     <div className="flex items-start gap-3">
-                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 text-sm">2</div>
-                      <p className="text-blue-300">Tap Menu or Settings and select Linked Devices</p>
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center text-zinc-300 text-sm">2</div>
+                      <p className="text-zinc-300">Tap Menu or Settings and select Linked Devices</p>
                     </div>
                     <div className="flex items-start gap-3">
-                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 text-sm">3</div>
-                      <p className="text-blue-300">Tap on "Link a Device"</p>
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center text-zinc-300 text-sm">3</div>
+                      <p className="text-zinc-300">Tap on "Link a Device"</p>
                     </div>
                     <div className="flex items-start gap-3">
-                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-500/20 flex items-center justify-center text-blue-400 text-sm">4</div>
-                      <p className="text-blue-300">Point your phone to this screen to capture the code</p>
+                      <div className="flex-shrink-0 w-6 h-6 rounded-full bg-zinc-700 flex items-center justify-center text-zinc-300 text-sm">4</div>
+                      <p className="text-zinc-300">Point your phone to this screen to capture the code</p>
                     </div>
                   </div>
                 </div>
-                <div className="bg-emerald-900/20 border border-emerald-900/30 rounded-lg p-4">
-                  <p className="text-emerald-300 text-sm">
+                <div className="bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4">
+                  <p className="text-emerald-400 text-sm">
                     Once connected, you'll be able to use WhatsApp on this device
                   </p>
                 </div>
@@ -699,7 +698,7 @@ export default function DevicesPage() {
         <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 rounded-xl sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-xl font-semibold text-center">
-              <span className="bg-gradient-to-r from-emerald-400 to-teal-400 bg-clip-text text-transparent">
+              <span className="text-emerald-400">
                 WhatsApp Connected Successfully!
               </span>
             </DialogTitle>
@@ -712,12 +711,12 @@ export default function DevicesPage() {
                     <img
                       src={connectedInstance.whatsapp.profile}
                       alt="WhatsApp Profile"
-                      className="w-24 h-24 rounded-full mb-4 border-4 border-emerald-500/20 shadow-lg shadow-emerald-500/20"
+                      className="w-24 h-24 rounded-full mb-4 border-4 border-emerald-500/20"
                     />
                     <div className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-emerald-500 border-4 border-zinc-900"></div>
                   </div>
                 ) : (
-                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center mb-4 border-4 border-emerald-500/20 shadow-lg shadow-emerald-500/20">
+                  <div className="w-24 h-24 rounded-full bg-zinc-800 flex items-center justify-center mb-4 border-4 border-emerald-500/20">
                     <Phone className="h-12 w-12 text-emerald-400" />
                   </div>
                 )}
@@ -729,11 +728,11 @@ export default function DevicesPage() {
                     {connectedInstance.name}
                   </p>
                 )}
-                <div className="mt-6 bg-emerald-900/20 border border-emerald-900/30 rounded-lg p-4 text-sm text-emerald-300 w-full text-center">
+                <div className="mt-6 bg-emerald-500/10 border border-emerald-500/20 rounded-lg p-4 text-sm text-emerald-400 w-full text-center">
                   <p>Your WhatsApp account is now successfully connected and ready to use!</p>
                 </div>
                 <Button
-                  className="mt-6 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-medium px-6 py-2 h-12 rounded-xl transition-all duration-300 shadow-lg shadow-emerald-500/20 hover:shadow-emerald-500/40"
+                  className="mt-6 bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-6 py-2 h-12 rounded-xl transition-all duration-300"
                   onClick={() => setShowSuccessDialog(false)}
                 >
                   Continue
@@ -771,16 +770,16 @@ export default function DevicesPage() {
                       className="w-20 h-20 rounded-full border-4 border-zinc-700/50"
                     />
                     <div className={`absolute bottom-0 right-0 w-6 h-6 rounded-full border-2 border-zinc-900 ${
-                      selectedInstance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                      selectedInstance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-red-500'
                     }`}></div>
                   </div>
                 ) : (
                   <div className="relative flex justify-center">
-                    <div className="w-20 h-20 rounded-full bg-gradient-to-br from-zinc-700 to-zinc-800 flex items-center justify-center border-4 border-zinc-700/50">
+                    <div className="w-20 h-20 rounded-full bg-zinc-800 flex items-center justify-center border-4 border-zinc-700/50">
                       <Phone className="h-8 w-8 text-zinc-400" />
                     </div>
                     <div className={`absolute bottom-0 right-0 w-6 h-6 rounded-full border-2 border-zinc-900 ${
-                      selectedInstance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                      selectedInstance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-red-500'
                     }`}></div>
                   </div>
                 )}
@@ -792,14 +791,14 @@ export default function DevicesPage() {
             <div className="w-full space-y-4">
               <div className="space-y-2">
                 <label htmlFor="instanceName" className="text-sm font-medium text-zinc-400">
-                  Device Name
+                  *Instance Name
                 </label>
                 <Input
                   id="instanceName"
                   value={editInstanceName}
                   onChange={(e) => setEditInstanceName(e.target.value)}
                   placeholder="Enter device name"
-                  className="bg-zinc-800 border-zinc-700 text-zinc-200 focus:border-blue-600 transition-all duration-200"
+                  className="bg-zinc-800 border-zinc-700 text-zinc-200 focus:border-zinc-600"
                 />
               </div>
               <div className="flex gap-3 justify-end">
@@ -816,11 +815,11 @@ export default function DevicesPage() {
                   Cancel
                 </Button>
                 <Button
-                  className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                  className="bg-zinc-800 hover:bg-zinc-700 text-white"
                   onClick={handleEditInstance}
-                  disabled={!editInstanceName.trim() || isProcessingEdit[editInstanceId]}
+                  disabled={!editInstanceName.trim() || isProcessingEdit[editInstanceId!]}
                 >
-                  {isProcessingEdit[editInstanceId] ? (
+                  {isProcessingEdit[editInstanceId!] ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : 'Save Changes'}
                 </Button>

@@ -1,1345 +1,1095 @@
+
 "use client";
 
-import { useEffect, useState } from 'react';
-import { Card } from "@/components/ui/card";
+import { useState, useEffect, useRef } from 'react';
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Switch } from "@/components/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import {
-  Send,
-  Loader2,
-  Image as ImageIcon,
-  Video,
-  FileText,
-  X,
-  CheckCircle2,
-  XCircle,
-  Clock,
-  AlertCircle,
-  File,
-  Plus,
-  Minus,
-  Calendar,
-  FileSpreadsheet,
-  Link2,
-  Shield,
-  Users,
-  Check,
-  Search
-} from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Plus, Send, Trash2, Loader2, CheckCircle, XCircle, ChevronDown, Bold, Italic, Strikethrough, List, Quote, Code, Upload } from 'lucide-react';
+import Cookies from 'js-cookie';
+import { useRouter } from 'next/navigation';
+import { Toaster, toast } from 'react-hot-toast';
+import * as XLSX from 'xlsx';
 
-type NumberEntry = {
-  number: string;
-  repeatCount: number;
-  scheduleTime?: string;
-};
-
-type Group = {
-  id: string;
+interface Template {
+  _id: string;
   name: string;
-  participantsCount: number;
-};
+  messageType: string;
+  template: {
+    message: string;
+    header?: string;
+    footer?: string;
+    button?: Array<{ name: string; type: string; url?: string }>;
+  };
+}
+
+interface Instance {
+  _id: string;
+  name: string;
+  whatsapp: {
+    status: string;
+    phone?: string;
+  };
+}
+
+interface Recipient {
+  phone: string;
+  name: string;
+  variables: { [key: string]: string };
+}
+
+interface SendResponse {
+  phone: string;
+  status: boolean;
+  message: string;
+  instanceId: string;
+}
+
+interface ExcelRow {
+  [key: string]: string;
+}
 
 export default function MessagingPage() {
-  const [message, setMessage] = useState('');
-  const [numbers, setNumbers] = useState<NumberEntry[]>([]);
-  const [currentNumber, setCurrentNumber] = useState('');
-  const [status, setStatus] = useState('');
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [instances, setInstances] = useState<Instance[]>([]);
+  const [selectedTemplate, setSelectedTemplate] = useState<string>('');
+  const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
+  const [recipients, setRecipients] = useState<Recipient[]>([
+    { phone: '', name: '', variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' } },
+  ]);
+  const [delayRange, setDelayRange] = useState<{ start: number; end: number }>({ start: 3, end: 5 });
+  const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
-  const [messageHistory, setMessageHistory] = useState<any[]>([]);
-  const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [selectedVideo, setSelectedVideo] = useState<File | null>(null);
-  const [selectedDocument, setSelectedDocument] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [videoPreview, setVideoPreview] = useState<string | null>(null);
-  const [documentName, setDocumentName] = useState<string | null>(null);
-  const [scheduleDate, setScheduleDate] = useState('');
-  const [scheduleTime, setScheduleTime] = useState('');
-  const [sheetUrl, setSheetUrl] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isScheduled, setIsScheduled] = useState(false);
-  const [csvFile, setCsvFile] = useState<File | null>(null);
-  const [sheetsUrl, setSheetsUrl] = useState('');
-  const [importMethod, setImportMethod] = useState<'none' | 'csv' | 'sheets'>('none');
-  const [isSafeMode, setIsSafeMode] = useState(false);
-  const [currentSendingIndex, setCurrentSendingIndex] = useState(-1);
-  const [isSendingInProgress, setIsSendingInProgress] = useState(false);
+  const [responseDialogOpen, setResponseDialogOpen] = useState(false);
+  const [sendResponses, setSendResponses] = useState<SendResponse[]>([]);
+  const [isInstanceDropdownOpen, setIsInstanceDropdownOpen] = useState(false);
+  const [message, setMessage] = useState('');
+  const editorRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
 
-  // Group messaging states
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
-  const [isLoadingGroups, setIsLoadingGroups] = useState(false);
-  const [groupMessageHistory, setGroupMessageHistory] = useState<any[]>([]);
-  const [groupSearchQuery, setGroupSearchQuery] = useState('');
+  // State for Excel import modal
+  const [importModalOpen, setImportModalOpen] = useState(false);
+  const [excelData, setExcelData] = useState<ExcelRow[]>([]);
+  const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
+  const [selectedHeaderRow, setSelectedHeaderRow] = useState<number>(0);
+  const [isExcelDataLoaded, setIsExcelDataLoaded] = useState(false);
+  const [columnMappings, setColumnMappings] = useState<{ [key: string]: string }>({});
+  const [showColumnMapping, setShowColumnMapping] = useState(false);
 
+  // Fetch templates and instances
   useEffect(() => {
-    const selectedNumbers = localStorage.getItem('selectedNumbers');
-    if (selectedNumbers) {
-      const numbersList = selectedNumbers.split('\n')
-        .map(num => ({ number: num.trim(), repeatCount: 1 }))
-        .filter(entry => entry.number);
-      setNumbers(prev => [...prev, ...numbersList]);
-      localStorage.removeItem('selectedNumbers');
-    }
-    fetchGroups();
-  }, []);
-
-  const fetchGroups = async () => {
-    try {
-      setIsLoadingGroups(true);
-      const token = localStorage.getItem('token');
-      const response = await fetch('https://bulkwhasapp-backend.onrender.com/api/whatsapp-groups', {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
-      });
-      
-      const data = await response.json();
-      if (data.status) {
-        setGroups(data.data.groups);
-      }
-    } catch (error) {
-      console.error('Error fetching groups:', error);
-    } finally {
-      setIsLoadingGroups(false);
-    }
-  };
-  // Add this function to filter groups based on search query
-  const filteredGroups = groups.filter(group =>
-    group.name.toLowerCase().includes(groupSearchQuery.toLowerCase())
-  );
-  const isValidNumber = (num: string) => {
-    return /^\d+$/.test(num.trim());
-  };
-
-  const isDuplicateNumber = (num: string) => {
-    return numbers.some(entry => entry.number === num.trim());
-  };
-
-  const formatPhoneNumber = (number: string) => {
-    const cleaned = number.replace(/\D/g, '');
-    
-    if (cleaned.length >= 12) {
-      return '+' + cleaned;
-    }
-    
-    if (cleaned.length === 10) {
-      return '+91' + cleaned;
-    }
-    
-    return '+' + cleaned;
-  };
-
-  const handleNumberInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const value = e.target.value;
-    setCurrentNumber(value);
-    
-    if (value.includes('\n')) {
-      const newNumbers = value
-        .split('\n')
-        .map(num => num.trim())
-        .filter(num => {
-          if (!num) return false;
-          if (!isValidNumber(num)) return false;
-          if (isDuplicateNumber(num)) return false;
-          return true;
-        })
-        .map(num => ({ number: num, repeatCount: 1 }));
-      
-      setNumbers(prev => [...prev, ...newNumbers]);
-      setCurrentNumber('');
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      const num = currentNumber.trim();
-      
-      if (num) {
-        if (!isValidNumber(num)) {
-          setStatus('Please enter only numeric characters');
-          return;
-        }
-        
-        if (isDuplicateNumber(num)) {
-          setStatus('This number has already been added');
-          return;
-        }
-        
-        setNumbers(prev => [...prev, { number: num, repeatCount: 1 }]);
-        setCurrentNumber('');
-        setStatus('');
-      }
-    }
-  };
-
-  const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 16 * 1024 * 1024) {
-        setStatus('Image size should be less than 16MB');
+    const fetchData = async () => {
+      const token = Cookies.get('token');
+      if (!token) {
+        router.push('/login');
         return;
       }
-      setSelectedImage(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setImagePreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-      setSelectedVideo(null);
-      setVideoPreview(null);
-      setSelectedDocument(null);
-      setDocumentName(null);
-    }
-  };
 
-  const handleVideoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 50 * 1024 * 1024) {
-        setStatus('Video size should be less than 16MB');
-        return;
+      setIsLoading(true);
+      try {
+        const templateResponse = await fetch('https://whatsapp.recuperafly.com/api/template/all', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ page: 1, limit: 100 }),
+        });
+        const templateData = await templateResponse.json();
+        if (templateData.status) {
+          setTemplates(templateData.templates || []);
+        } else {
+          toast.error(templateData.message || 'Failed to fetch templates');
+        }
+
+        const instanceResponse = await fetch('https://whatsapp.recuperafly.com/api/instance/all', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({}),
+        });
+        const instanceData = await instanceResponse.json();
+        if (instanceData.status) {
+          setInstances(instanceData.instances || []);
+        } else {
+          toast.error(instanceData.message || 'Failed to fetch instances');
+        }
+      } catch (err) {
+        toast.error('Error fetching data: ' );
+      } finally {
+        setIsLoading(false);
       }
-      setSelectedVideo(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setVideoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
-      setSelectedImage(null);
-      setImagePreview(null);
-      setSelectedDocument(null);
-      setDocumentName(null);
+    };
+
+    fetchData();
+  }, [router]);
+
+  // Update message when template is selected
+  useEffect(() => {
+    const selectedTemplateObj = templates.find((t) => t._id === selectedTemplate);
+    if (selectedTemplateObj && editorRef.current) {
+      editorRef.current.innerText = selectedTemplateObj.template.message || '';
+      setMessage(selectedTemplateObj.template.message || '');
+    } else if (editorRef.current) {
+      editorRef.current.innerText = '';
+      setMessage('');
     }
-  };
+  }, [selectedTemplate, templates]);
 
-  const handleDocumentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 16 * 1024 * 1024) {
-        setStatus('Document size should be less than 16MB');
-        return;
-      }
-      setSelectedDocument(file);
-      setDocumentName(file.name);
-      setSelectedImage(null);
-      setImagePreview(null);
-      setSelectedVideo(null);
-      setVideoPreview(null);
+  // Ensure editor content and message state stay in sync
+  useEffect(() => {
+    if (editorRef.current && editorRef.current.innerText !== message) {
+      editorRef.current.innerText = message;
     }
+  }, [message]);
+
+  // Handle recipient input changes
+  const handleRecipientChange = (index: number, field: keyof Recipient, value: string) => {
+    const newRecipients = [...recipients];
+    newRecipients[index] = { ...newRecipients[index], [field]: value };
+    setRecipients(newRecipients);
   };
 
-  const handleFileImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    const fileExtension = file.name.toLowerCase().split('.').pop();
-    if (!['csv', 'xlsx', 'xls'].includes(fileExtension || '')) {
-      setStatus('Please upload a CSV or Excel file');
-      return;
-    }
-
-    try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      const token = localStorage.getItem('token');
-      const response = await fetch('https://bulkwhasapp-backend.onrender.com/api/import-numbers-csv', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
-      });
-
-      const data = await response.json();
-      
-      if (data.status) {
-        const formattedNumbers = data.data.numbers.map((entry: any) => ({
-          number: formatPhoneNumber(entry.number),
-          repeatCount: 1,
-          scheduleTime: undefined
-        }));
-        
-        setNumbers(prev => [...prev, ...formattedNumbers]);
-        setStatus(`Successfully imported ${data.data.total} numbers from ${fileExtension?.toUpperCase()}`);
-        setCsvFile(file);
-      } else {
-        setStatus('Failed to import numbers: ' + data.message);
-      }
-    } catch (error) {
-      setStatus('Error importing file. Please try again.');
-    }
+  // Handle variable input changes
+  const handleVariableChange = (index: number, varName: string, value: string) => {
+    const newRecipients = [...recipients];
+    newRecipients[index].variables = { ...newRecipients[index].variables, [varName]: value };
+    setRecipients(newRecipients);
   };
 
-  const handleSheetsImport = async () => {
-    if (!sheetsUrl) {
-      setStatus('Please enter a Google Sheets URL');
-      return;
-    }
-
-    try {
-      const token = localStorage.getItem('token');
-      const response = await fetch('https://bulkwhasapp-backend.onrender.com/api/import-numbers-sheets', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ sheetUrl: sheetsUrl })
-      });
-
-      const data = await response.json();
-      
-      if (data.status) {
-        setNumbers(prev => [...prev, ...data.data.numbers]);
-        setStatus(`Successfully imported ${data.data.total} numbers from Google Sheets`);
-      } else {
-        setStatus('Failed to import numbers: ' + data.message);
-      }
-    } catch (error) {
-      setStatus('Error importing from Google Sheets. Please try again.');
-    }
+  // Add new recipient
+  const addRecipient = () => {
+    setRecipients([...recipients, { phone: '', name: '', variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' } }]);
   };
 
-  const handleIncreaseRepeat = (index: number) => {
-    setNumbers(prev => prev.map((entry, i) => 
-      i === index ? { ...entry, repeatCount: (entry.repeatCount || 1) + 1 } : entry
-    ));
+  // Remove recipient
+  const removeRecipient = (index: number) => {
+    setRecipients(recipients.filter((_, i) => i !== index));
   };
 
-  const handleDecreaseRepeat = (index: number) => {
-    setNumbers(prev => prev.map((entry, i) => 
-      i === index ? { ...entry, repeatCount: Math.max((entry.repeatCount || 1) - 1, 1) } : entry
-    ));
-  };
-
-  const handleRemoveNumber = (index: number) => {
-    setNumbers(prev => prev.filter((_, i) => i !== index));
-  };
-
-  const handleAddNumber = () => {
-    if (!currentNumber) return;
-    
-    const formattedNumber = formatPhoneNumber(currentNumber);
-    setNumbers(prev => [...prev, { 
-      number: formattedNumber,
-      repeatCount: 1,
-      scheduleTime: undefined
-    }]);
-    setCurrentNumber('');
-  };
-
-  const toggleGroupSelection = (groupId: string) => {
-    setSelectedGroups(prev => 
-      prev.includes(groupId)
-        ? prev.filter(id => id !== groupId)
-        : [...prev, groupId]
+  // Handle instance selection
+  const handleInstanceToggle = (instanceId: string) => {
+    setSelectedInstances((prev) =>
+      prev.includes(instanceId)
+        ? prev.filter((id) => id !== instanceId)
+        : [...prev, instanceId]
     );
   };
 
-  const handleSendToGroups = async () => {
-    if (!message && !selectedImage && !selectedVideo && !selectedDocument) {
-      setStatus('Please provide a message or select media/document');
-      return;
+  // Handle message input
+  const handleInput = () => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    let text = editor.innerText;
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+
+    const range = selection.getRangeAt(0);
+    const cursorPos = range.startOffset;
+
+    const boldPattern = /\*\*(.*?)\*\*/g;
+    const italicPattern = /\*(.*?)\*/g;
+    const strikethroughPattern = /~~(.*?)~~/g;
+    const bulletPattern = /^-\s(.*)$/gm;
+    const quotePattern = /^>\s(.*)$/gm;
+    const codePattern = /`(.*?)`/g;
+
+    let modified = false;
+
+    if (boldPattern.test(text)) {
+      editor.innerHTML = text.replace(boldPattern, '<b>$1</b>');
+      text = editor.innerText;
+      modified = true;
     }
-    if (selectedGroups.length === 0) {
-      setStatus('Please select at least one group');
-      return;
+    if (italicPattern.test(text)) {
+      editor.innerHTML = text.replace(italicPattern, '<i>$1</i>');
+      text = editor.innerText;
+      modified = true;
+    }
+    if (strikethroughPattern.test(text)) {
+      editor.innerHTML = text.replace(strikethroughPattern, '<s>$1</s>');
+      text = editor.innerText;
+      modified = true;
+    }
+    if (bulletPattern.test(text)) {
+      editor.innerHTML = text.replace(bulletPattern, '<ul><li>$1</li></ul>');
+      text = editor.innerText;
+      modified = true;
+    }
+    if (quotePattern.test(text)) {
+      editor.innerHTML = text.replace(quotePattern, '<blockquote>$1</blockquote>');
+      text = editor.innerText;
+      modified = true;
+    }
+    if (codePattern.test(text)) {
+      editor.innerHTML = text.replace(codePattern, '<code>$1</code>');
+      text = editor.innerText;
+      modified = true;
     }
 
-    setIsSending(true);
-    setStatus('Sending messages to groups...');
+    setMessage(text);
 
-    try {
-      const token = localStorage.getItem('token');
-      const formData = new FormData();
-      formData.append('message', message);
-      formData.append('groups', JSON.stringify(selectedGroups));
-
-      if (selectedImage) {
-        formData.append('media', selectedImage);
-        formData.append('mediaType', 'image');
-      } else if (selectedVideo) {
-        formData.append('media', selectedVideo);
-        formData.append('mediaType', 'video');
-      } else if (selectedDocument) {
-        formData.append('media', selectedDocument);
-        formData.append('mediaType', 'document');
+    if (modified && selection) {
+      const newRange = document.createRange();
+      const newSelection = window.getSelection();
+      if (newSelection) {
+        try {
+          const targetNode = editor.firstChild || editor;
+          const maxOffset = targetNode.nodeType === 3 ? targetNode.textContent?.length || 0 : editor.childNodes.length;
+          const safeOffset = Math.min(cursorPos, maxOffset);
+          newRange.setStart(targetNode, safeOffset);
+          newRange.collapse(true);
+          newSelection.removeAllRanges();
+          newSelection.addRange(newRange);
+        } catch (error) {
+          console.warn('Failed to restore cursor position:', error);
+          newRange.selectNodeContents(editor);
+          newRange.collapse(false);
+          newSelection.removeAllRanges();
+          newSelection.addRange(newRange);
+        }
       }
+    }
+  };
 
-      const response = await fetch('https://bulkwhasapp-backend.onrender.com/api/send-group-message', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`
-        },
-        body: formData
+  // Apply formatting
+  const applyFormatting = (format: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    editor.focus();
+    document.execCommand(format, false, format === 'formatBlock' ? 'blockquote' : undefined);
+    setMessage(editor.innerText);
+  };
+
+  // Handle variable selection
+  const handleVariableSelect = (value: string) => {
+    const editor = editorRef.current;
+    if (!editor) return;
+
+    editor.focus();
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) return;
+
+    const range = selection.getRangeAt(0);
+    const placeholder = value === 'name' ? '{{name}}' : value === 'number' ? '{{number}}' : `{{var${value.split(' ')[1]}}}`;
+    range.insertNode(document.createTextNode(placeholder));
+    range.collapse(false);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    setMessage(editor.innerText);
+  };
+
+  // Handle Excel file upload
+  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.match(/\.(xlsx|xls|csv)$/)) {
+      toast.error('Please upload a valid Excel or CSV file');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = e.target?.result as ArrayBuffer;
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false }) as string[][];
+
+        if (jsonData.length === 0) {
+          toast.error('The uploaded file is empty');
+          return;
+        }
+
+        // Extract headers from the first row for display
+        const headers = jsonData[0].map((header, idx) => header || `Column ${idx + 1}`);
+        setExcelHeaders(headers);
+
+        // Convert rows to objects
+        const rows = jsonData.map((row) =>
+          row.reduce((obj, value, idx) => {
+            obj[headers[idx]] = value?.toString() || '';
+            return obj;
+          }, {} as ExcelRow)
+        );
+
+        setExcelData(rows);
+        setIsExcelDataLoaded(true);
+      } catch (err) {
+        toast.error('Error parsing file: The file may be corrupted or in an unsupported format.');
+        console.error(err);
+      }
+    };
+
+    reader.onerror = () => {
+      toast.error('Error reading the file');
+    };
+
+    if (file.name.endsWith('.csv')) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsArrayBuffer(file);
+    }
+  };
+
+  // Proceed to column mapping after selecting header row
+  const handleProceedToColumnMapping = () => {
+    if (excelData.length === 0) {
+      toast.error('No data to map');
+      return;
+    }
+
+    // Initialize column mappings based on header names
+    const initialMappings: { [key: string]: string } = {};
+    excelHeaders.forEach((header) => {
+      const lowerHeader = header.toLowerCase();
+      if (lowerHeader === 'name') {
+        initialMappings[header] = 'name';
+      } else if (lowerHeader === 'phone') {
+        initialMappings[header] = 'phone';
+      } else {
+        const varMatch = lowerHeader.match(/var(\d+)/);
+        if (varMatch && varMatch[1]) {
+          const varNum = parseInt(varMatch[1]);
+          if (varNum >= 1 && varNum <= 10) {
+            initialMappings[header] = `variable ${varNum}`;
+          } else {
+            initialMappings[header] = 'ignore';
+          }
+        } else {
+          initialMappings[header] = 'ignore';
+        }
+      }
+    });
+
+    setColumnMappings(initialMappings);
+    setShowColumnMapping(true);
+  };
+
+  // Handle column mapping change
+  const handleColumnMappingChange = (header: string, value: string) => {
+    setColumnMappings((prev) => ({
+      ...prev,
+      [header]: value,
+    }));
+  };
+
+  // Handle header row selection and import
+  const handleImportConfirm = () => {
+    if (!isExcelDataLoaded || excelData.length === 0) {
+      toast.error('No data to import');
+      return;
+    }
+
+    const headers = excelHeaders;
+
+    const newRecipients = excelData.slice(selectedHeaderRow + 1).map((row) => {
+      const recipient: Recipient = {
+        phone: '',
+        name: '',
+        variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' },
+      };
+
+      headers.forEach((header) => {
+        const mapping = columnMappings[header];
+        const value = row[header] || '';
+        if (mapping === 'name') {
+          recipient.name = value;
+        } else if (mapping === 'phone') {
+          recipient.phone = value;
+        } else if (mapping.startsWith('variable')) {
+          const varNum = parseInt(mapping.split(' ')[1]);
+          if (varNum >= 1 && varNum <= 10) {
+            recipient.variables[`var${varNum}`] = value;
+          }
+        }
       });
 
+      return recipient;
+    }).filter((recipient) => recipient.phone && recipient.name); // Filter out invalid recipients
+
+    setRecipients([...recipients, ...newRecipients]);
+    setImportModalOpen(false);
+    setExcelData([]);
+    setExcelHeaders([]);
+    setIsExcelDataLoaded(false);
+    setSelectedHeaderRow(0);
+    setShowColumnMapping(false);
+    setColumnMappings({});
+    toast.success('Recipients imported successfully');
+  };
+
+  // Create temporary template
+  const createTempTemplate = async (message: string) => {
+    const token = Cookies.get('token');
+    if (!token) return null;
+
+    const selectedTemplateObj = templates.find((t) => t._id === selectedTemplate);
+    if (!selectedTemplateObj) return null;
+
+    const payload = {
+      name: `Temp_${Date.now()}`,
+      messageType: selectedTemplateObj.messageType,
+      template: {
+        message,
+        ...(selectedTemplateObj.messageType === 'Buttons' && {
+          header: selectedTemplateObj.template.header || '',
+          footer: selectedTemplateObj.template.footer || '',
+          button: selectedTemplateObj.template.button?.map(btn => ({
+            name: btn.name,
+            type: btn.type,
+            ...(btn.url && { url: btn.url }),
+          })) || [],
+        }),
+      },
+    };
+
+    try {
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
       const data = await response.json();
-      if (data.status) {
-        setGroupMessageHistory(prev => [...data.data.results, ...prev]);
-        setMessage('');
-        setSelectedImage(null);
-        setSelectedVideo(null);
-        setSelectedDocument(null);
-        setImagePreview(null);
-        setVideoPreview(null);
-        setDocumentName(null);
-        setSelectedGroups([]);
-        setStatus(`Messages sent successfully to ${data.data.summary.success} groups`);
+      return data.status && data.data?._id ? data.data._id : null;
+    } catch (err) {
+      console.error('Error creating temporary template:', err);
+      return null;
+    }
+  };
+
+  // Delete temporary template
+  const deleteTempTemplate = async (templateId: string) => {
+    const token = Cookies.get('token');
+    if (!token) return;
+
+    try {
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/delete', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ templateId }),
+      });
+      const data = await response.json();
+      if (!data.status) {
+        console.warn('Failed to delete temporary template:', data.message);
       }
-    } catch (error) {
-      setStatus('Error sending messages to groups. Please try again.');
+    } catch (err) {
+      console.warn('Error deleting temporary template:', err);
+    }
+  };
+
+  // Handle form submission
+  const handleSendMessages = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const token = Cookies.get('token');
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+
+    if (!selectedTemplate) {
+      toast.error('Please select a template');
+      return;
+    }
+    if (selectedInstances.length === 0) {
+      toast.error('Please select at least one instance');
+      return;
+    }
+    if (recipients.some((r) => !r.phone || !r.name || r.phone.trim() === '' || r.name.trim() === '')) {
+      toast.error('All recipients must have a valid phone number and name');
+      return;
+    }
+    if (delayRange.start < 0 || delayRange.end < delayRange.start) {
+      toast.error('Invalid delay range');
+      return;
+    }
+    if (!editorRef.current?.innerText) {
+      toast.error('Message cannot be empty');
+      return;
+    }
+
+    const currentMessage = editorRef.current.innerText || message;
+    setMessage(currentMessage);
+
+    setIsSending(true);
+    let tempTemplateId: string | null = null;
+    try {
+      tempTemplateId = await createTempTemplate(currentMessage);
+      if (!tempTemplateId) {
+        toast.error('Failed to create temporary template');
+        return;
+      }
+
+      const payload = {
+        templateId: tempTemplateId,
+        instanceIds: selectedInstances,
+        recipients: recipients.map((r) => ({
+          phone: r.phone,
+          name: r.name,
+          variables: Object.entries(r.variables)
+            .filter(([_, value]) => value && value.trim() !== '')
+            .reduce((acc, [key, value]) => ({ ...acc, [key]: value }), {}),
+        })),
+        delayRange,
+      };
+
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await response.json();
+
+      if (data.status) {
+        setSendResponses(data.data || []);
+        setResponseDialogOpen(true);
+        toast.success(data.message || 'Messages processed successfully');
+      } else {
+        toast.error(data.message || 'Failed to send messages');
+      }
+    } catch (err) {
+      toast.error('Error sending messages: ' );
     } finally {
+      if (tempTemplateId) {
+        await deleteTempTemplate(tempTemplateId);
+      }
       setIsSending(false);
     }
   };
-  const sendMessageToSingleNumber = async (numberObj: NumberEntry) => {
-    try {
-      const token = localStorage.getItem('token');
-      let successCount = 0;
-  
-      // Send message multiple times based on repeatCount
-      for (let i = 0; i < (numberObj.repeatCount || 1); i++) {
-        const formData = new FormData();
-        formData.append('message', message);
-        formData.append('numbers', JSON.stringify([{ ...numberObj, repeatCount: 1 }]));
-  
-        if (selectedImage) {
-          formData.append('media', selectedImage);
-          formData.append('mediaType', 'image');
-        } else if (selectedVideo) {
-          formData.append('media', selectedVideo);
-          formData.append('mediaType', 'video');
-        } else if (selectedDocument) {
-          formData.append('media', selectedDocument);
-          formData.append('mediaType', 'document');
-        }
-  
-        const response = await fetch('https://bulkwhasapp-backend.onrender.com/api/send-bulk-message', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
-          body: formData
-        });
-  
-        const data = await response.json();
-        if (data.status) {
-          setMessageHistory(prev => [...data.data.results, ...prev]);
-          successCount++;
-        }
-  
-        // Add delay between repeated messages
-        if (i < numberObj.repeatCount - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
-  
-      return successCount === (numberObj.repeatCount || 1);
-    } catch (error) {
-      console.error('Error sending message:', error);
-      return false;
-    }
-  };
-  
-  const handleSendMessages = async () => {
-    if (!message && !selectedImage && !selectedVideo && !selectedDocument) {
-      setStatus('Please provide a message or select media/document');
-      return;
-    }
-    if (numbers.length === 0) {
-      setStatus('Please add recipient numbers');
-      return;
-    }
-  
-    if (isSafeMode) {
-      setIsSendingInProgress(true);
-      setCurrentSendingIndex(0);
-  
-      for (let i = 0; i < numbers.length; i++) {
-        setCurrentSendingIndex(i);
-        const success = await sendMessageToSingleNumber(numbers[i]);
-        
-        if (success) {
-          setNumbers(prev => prev.filter((_, index) => index !== i));
-          
-          if (i < numbers.length - 1) {
-            await new Promise(resolve => setTimeout(resolve, 12000));
-          }
-        }
-      }
-  
-      setCurrentSendingIndex(-1);
-      setIsSendingInProgress(false);
-      setStatus('All messages sent in safe mode');
-      setNumbers([]);
-    } else {
-      setIsSending(true);
-      setStatus('Sending messages...');
-  
-      try {
-        const token = localStorage.getItem('token');
-        
-        // Create an array with repeated numbers based on repeatCount
-        const expandedNumbers = numbers.flatMap(number => {
-          const repeatedNumbers = Array(number.repeatCount || 1).fill({
-            number: number.number,
-            scheduledTime: scheduleDate && scheduleTime ? 
-              new Date(`${scheduleDate}T${scheduleTime}`).toISOString() : 
-              null
-          });
-          return repeatedNumbers;
-        });
-  
-        const formData = new FormData();
-        formData.append('message', message);
-        formData.append('numbers', JSON.stringify(expandedNumbers));
-  
-        if (selectedImage) {
-          formData.append('media', selectedImage);
-          formData.append('mediaType', 'image');
-        } else if (selectedVideo) {
-          formData.append('media', selectedVideo);
-          formData.append('mediaType', 'video');
-        } else if (selectedDocument) {
-          formData.append('media', selectedDocument);
-          formData.append('mediaType', 'document');
-        }
-  
-        // Add scheduling information
-        if (scheduleDate && scheduleTime) {
-          formData.append('isScheduled', 'true');
-          formData.append('scheduleDate', scheduleDate);
-          formData.append('scheduleTime', scheduleTime);
-        }
-  
-        const response = await fetch('https://bulkwhasapp-backend.onrender.com/api/send-bulk-message', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          },
-          body: formData
-        });
-  
-        const data = await response.json();
-        if (data.status) {
-          const newHistory = data.data.results.map((result: any) => ({
-            number: result.number,
-            status: result.status === "success",
-            message: result.message,
-            time: new Date().toISOString(),
-            scheduledTime: result.scheduledTime
-          }));
-          
-          setMessageHistory(prev => [...newHistory, ...prev]);
-          setNumbers([]);
-          setMessage('');
-          setSelectedImage(null);
-          setSelectedVideo(null);
-          setSelectedDocument(null);
-          setImagePreview(null);
-          setVideoPreview(null);
-          setDocumentName(null);
-          setScheduleDate('');
-          setScheduleTime('');
-          setStatus(`Messages ${scheduleDate && scheduleTime ? 'scheduled' : 'sent'} successfully: ${data.data.summary.success}/${data.data.summary.total}`);
-        } else {
-          setStatus('Failed to send messages: ' + data.message);
-        }
-      } catch (error) {
-        console.error('Error sending messages:', error);
-        setStatus('Error sending messages. Please try again.');
-      } finally {
-        setIsSending(false);
-      }
-    }
-  };
 
-  const handleSetScheduleTime = (index: number, time: string) => {
-    setNumbers(prev => prev.map((entry, i) => 
-      i === index ? { ...entry, scheduleTime: time } : entry
-    ));
-  };
+  const selectedTemplateObj = templates.find((t) => t._id === selectedTemplate);
+  const templateVariables = selectedTemplateObj?.template.message.match(/{{(.*?)}}/g)?.map((v) => v.replace(/{{|}}/g, '')) || [];
 
   return (
-    <div className="space-y-8">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-zinc-200">Messaging</h1>
-          <p className="text-zinc-400 mt-2">Send messages to contacts or groups</p>
-        </div>
-        <div className="flex items-center gap-2">
-          
-          <div className="flex items-center space-x-2">
-          <Shield className={`h-30 w-5 ${isSafeMode ? 'text-green-500' : 'text-zinc-500'}`} />
-            <Switch
-              checked={isSafeMode}
-              onCheckedChange={setIsSafeMode}
-              disabled={isSendingInProgress}
-            />
-          </div>
-          <span className="text-zinc-400">Safe Mode</span>
-        </div>
+    <div className="space-y-8 p-6 max-w-7xl mx-auto">
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: '#333',
+            color: '#fff',
+            borderRadius: '8px',
+          },
+        }}
+      />
+      <div className="flex justify-between items-center mb-8">
+        <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent">
+          Send Messages
+        </h1>
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => setImportModalOpen(true)}
+          className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+        >
+          <Upload className="h-5 w-5 mr-2" />
+          Import
+        </Button>
       </div>
 
-      <Tabs defaultValue="contacts" className="space-y-6">
-        <TabsList className="bg-zinc-800">
-          <TabsTrigger value="contacts" className="data-[state=active]:bg-zinc-900">
-            <Users className="h-4 w-4 mr-2" />
-            Contacts
-          </TabsTrigger>
-          <TabsTrigger value="groups" className="data-[state=active]:bg-zinc-900">
-            <Users className="h-4 w-4 mr-2" />
-            Groups
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="contacts">
-          <Card className="p-6 bg-black border-zinc-800">
-            <div className="space-y-6">
-              <div className="grid md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-400 mb-2">Message Content</label>
-                    <Textarea
-                      value={message}
-                      onChange={(e) => setMessage(e.target.value)}
-                      placeholder="Type your message here..."
-                      className="h-32 bg-zinc-900 border-zinc-800 text-zinc-200 resize-none"
-                    />
-                    <p className="text-xs text-zinc-500 mt-1">
-                      {message.length} characters
-                    </p>
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="block text-sm font-medium text-zinc-400">Media (Optional)</label>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleImageChange}
-                          className="hidden"
-                          id="image-upload"
-                        />
-                        <label
-                          htmlFor="image-upload"
-                          className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700"
-                        >
-                          <ImageIcon className="h-6 w-6 text-zinc-400 mb-2" />
-                          <span className="text-sm text-zinc-400">Image</span>
-                        </label>
-                      </div>
-                      <div>
-                        <input
-                          type="file"
-                          accept="video/*"
-                          onChange={handleVideoChange}
-                          className="hidden"
-                          id="video-upload"
-                        />
-                        <label
-                          htmlFor="video-upload"
-                          className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700"
-                        >
-                          <Video className="h-6 w-6 text-zinc-400 mb-2" />
-                          <span className="text-sm text-zinc-400">Video</span>
-                        </label>
-                      </div>
-                      <div>
-                        <input
-                          type="file"
-                          onChange={handleDocumentChange}
-                          className="hidden"
-                          id="document-upload"
-                        />
-                        <label
-                          htmlFor="document-upload"
-                          className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700"
-                        >
-                          <FileText className="h-6 w-6 text-zinc-400 mb-2" />
-                          <span className="text-sm text-zinc-400">Document</span>
-                        </label>
-                      </div>
-                    </div>
-
-                    {imagePreview && (
-                      <div className="relative">
-                        <img
-                          src={imagePreview}
-                          alt="Preview"
-                          className="max-h-40 rounded-lg"
-                        />
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="absolute top-2 right-2"
-                          onClick={() => {
-                            setSelectedImage(null);
-                            setImagePreview(null);
-                          }}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-
-                    {videoPreview && (
-                      <div className="relative">
-                        <video
-                          src={videoPreview}
-                          controls
-                          className="max-h-40 rounded-lg"
-                        />
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="absolute top-2 right-2"
-                          onClick={() => {
-                            setSelectedVideo(null);
-                            setVideoPreview(null);
-                          }}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-
-                    {documentName && (
-                      <div className="flex items-center justify-between p-3 bg-zinc-900 rounded-lg">
-                        <div className="flex items-center">
-                          <File className="h-5 w-5 text-zinc-400 mr-2" />
-                          <span className="text-zinc-200">{documentName}</span>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => {
-                            setSelectedDocument(null);
-                            setDocumentName(null);
-                          }}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-4">
-                    <div>
-                      <label className="block text-sm font-medium text-zinc-400 mb-2">
-                        Schedule Message (Optional)
-                      </label>
-                      <div className="flex items-center gap-4 mb-4">
-                        <input
-                          type="checkbox"
-                          checked={isScheduled}
-                          onChange={(e) => setIsScheduled(e.target.checked)}
-                          className="rounded border-zinc-800 bg-zinc-900"
-                        />
-                        <span className="text-zinc-400">Schedule for later</span>
-                      </div>
-                      {isScheduled && (
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm text-zinc-400 mb-1">Date</label>
-                            <Input
-                              type="date"
-                              value={scheduleDate}
-                              onChange={(e) => setScheduleDate(e.target.value)}
-                              className="bg-zinc-900 border-zinc-800 text-zinc-200"
-                              min={new Date().toISOString().split('T')[0]}
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm text-zinc-400 mb-1">Time</label>
-                            <Input
-                              type="time"
-                              value={scheduleTime}
-                              onChange={(e) => setScheduleTime(e.target.value)}
-                              className="bg-zinc-900 border-zinc-800 text-zinc-200"
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-medium text-zinc-400 mb-2">
-                        Add Recipients
-                      </label>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
-                        <div className="flex items-center">
-                          <input
-                            type="radio"
-                            id="manual"
-                            name="importMethod"
-                            value="none"
-                            checked={importMethod === 'none'}
-                            onChange={(e) => setImportMethod('none')}
-                            className="mr-2"
-                          />
-                          <label htmlFor="manual" className="text-zinc-300">Manual Entry</label>
-                        </div>
-                        
-                        <div className="flex items-center">
-                          <input
-                            type="radio"
-                            id="csv"
-                            name="importMethod"
-                            value="csv"
-                            checked={importMethod === 'csv'}
-                            onChange={(e) => setImportMethod('csv')}
-                            className="mr-2"
-                          />
-                          <label htmlFor="csv" className="text-zinc-300">Import from .CSV</label>
-                        </div>
-                        
-                        <div className="flex items-center">
-                          <input
-                            type="radio"
-                            id="sheets"
-                            name="importMethod"
-                            value="sheets"
-                            checked={importMethod === 'sheets'}
-                            onChange={(e) => setImportMethod('sheets')}
-                            className="mr-2"
-                          />
-                          <label htmlFor="sheets" className="text-zinc-300">Google Sheets</label>
-                        </div>
-                      </div>
-
-                      {importMethod === 'none' && (
-                        <div className="flex gap-2 mb-4">
-                          <Textarea
-                            value={currentNumber}
-                            onChange={handleNumberInput}
-                            onKeyDown={handleKeyDown}
-                            placeholder="Enter phone numbers (one per line)"
-                            className="bg-zinc-900 border-zinc-800 text-zinc-200 min-h-[10px]"
-                            style={{ resize: 'none' }}
-                          />
-                          <Button
-                            onClick={handleAddNumber}
-                            className="bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+      {isLoading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="flex flex-col items-center">
+            <Loader2 className="h-12 w-12 text-blue-500 animate-spin mb-4" />
+            <p className="text-zinc-400">Loading data...</p>
+          </div>
+        </div>
+      ) : (
+        <Card className="bg-zinc-900/80 border-zinc-800/80 rounded-xl">
+          <form onSubmit={handleSendMessages}>
+            <CardContent className="p-6 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label className="text-zinc-400 font-medium">Select Template</Label>
+                  <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
+                    <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                      <SelectValue placeholder="Select a template" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                      {templates.map((template) => (
+                        <SelectItem key={template._id} value={template._id}>
+                          {template.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-zinc-400 font-medium">Select Instances</Label>
+                  <div className="relative">
+                    <Button
+                      type="button"
+                      className="w-full bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 justify-between"
+                      onClick={() => setIsInstanceDropdownOpen(!isInstanceDropdownOpen)}
+                    >
+                      <span>
+                        {selectedInstances.length > 0
+                          ? `${selectedInstances.length} instance${selectedInstances.length > 1 ? 's' : ''} selected`
+                          : 'Select instances'}
+                      </span>
+                      <ChevronDown className="h-4 w-4" />
+                    </Button>
+                    {isInstanceDropdownOpen && (
+                      <div className="absolute z-10 w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md shadow-lg max-h-60 overflow-auto">
+                        {instances.map((instance) => (
+                          <div
+                            key={instance._id}
+                            className={`px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-zinc-700 ${
+                              selectedInstances.includes(instance._id) ? 'bg-blue-500/10' : ''
+                            }`}
+                            onClick={() => handleInstanceToggle(instance._id)}
                           >
-                            <Plus className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      )}
-
-                      {importMethod === 'csv' && (
-                        <div className="mb-4">
-                          <div className="flex gap-4 items-center">
-                            <input
-                              type="file"
-                              accept=".csv,.xlsx,.xls"
-                              onChange={handleFileImport}
-                              className="hidden"
-                              id="file-upload"
+                            <div>
+                              <p className="text-zinc-200">
+                                {instance.whatsapp.phone || `Device ${instance._id.slice(-4)}`}
+                              </p>
+                              {instance.name && <p className="text-sm text-zinc-400">{instance.name}</p>}
+                            </div>
+                            <div
+                              className={`w-4 h-4 rounded-full ${
+                                instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                              }`}
                             />
-                            <label
-                              htmlFor="file-upload"
-                              className="flex items-center gap-2 px-4 py-2 bg-zinc-800 text-zinc-200 rounded-md cursor-pointer hover:bg-zinc-700"
-                            >
-                              <FileSpreadsheet className="h-4 w-4" />
-                              Upload CSV/Excel
-                            </label>
-                            {csvFile && (
-                              <span className="text-zinc-400">
-                                File: {csvFile.name}
-                              </span>
-                            )}
                           </div>
-                          <p className="text-xs text-zinc-500 mt-2">
-                            Upload a CSV or Excel file with phone numbers in the first column
-                          </p>
-                        </div>
-                      )}
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
 
-                      {importMethod === 'sheets' && (
-                        <div className="mb-4 space-y-4">
-                          <div className="flex gap-2">
+              <div className="space-y-4">
+                <Label className="text-zinc-400 font-medium">Recipients</Label>
+                <div className="overflow-x-auto">
+                  <Table className="min-w-[1200px]">
+                    <TableHeader>
+                      <TableRow className="border-zinc-800">
+                        <TableHead className="text-zinc-400">Name</TableHead>
+                        <TableHead className="text-zinc-400">Phone Number</TableHead>
+                        {Array.from({ length: 10 }, (_, i) => (
+                          <TableHead key={`var${i + 1}`} className="text-zinc-400">Variable {i + 1}</TableHead>
+                        ))}
+                        <TableHead className="text-zinc-400">Action</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {recipients.map((recipient, index) => (
+                        <TableRow key={index} className="border-zinc-800">
+                          <TableCell>
                             <Input
-                              value={sheetsUrl}
-                              onChange={(e) => setSheetsUrl(e.target.value)}
-                              placeholder="Enter Google Sheets URL"
-                              className="bg-zinc-900 border-zinc-800 text-zinc-200"
+                              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                              placeholder="Enter name"
+                              value={recipient.name}
+                              onChange={(e) => handleRecipientChange(index, 'name', e.target.value)}
                             />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                              placeholder="Enter phone number"
+                              value={recipient.phone}
+                              onChange={(e) => handleRecipientChange(index, 'phone', e.target.value)}
+                            />
+                          </TableCell>
+                          {Array.from({ length: 10 }, (_, i) => (
+                            <TableCell key={`var${i + 1}`}>
+                              <Input
+                                className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                                placeholder={`Enter var${i + 1}`}
+                                value={recipient.variables[`var${i + 1}`] || ''}
+                                onChange={(e) => handleVariableChange(index, `var${i + 1}`, e.target.value)}
+                              />
+                            </TableCell>
+                          ))}
+                          <TableCell>
                             <Button
-                              onClick={handleSheetsImport}
-                              className="bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => removeRecipient(index)}
+                              className="text-red-400 hover:text-red-300"
                             >
-                              <Link2 className="h-4 w-4 mr-2" />
-                              Import
+                              <Trash2 className="h-5 w-5" />
                             </Button>
-                          </div>
-                          <p className="text-xs text-zinc-500">
-                            Make sure the sheet is publicly accessible and has phone numbers in column A
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <Button
-                    onClick={handleSendMessages}
-                    disabled={isSending || (!message && !selectedImage && !selectedVideo && !selectedDocument) || numbers.length === 0}
-                    className="w-full bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                  >
-                    {isSending ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w -4 w-4 animate-spin" />
-                        {isScheduled ? 'Scheduling Messages...' : 'Sending Messages...'}
-                      </>
-                    ) : (
-                      <>
-                        {isScheduled ? (
-                          <>
-                            <Calendar className="mr-2 h-4 w-4" />
-                            Schedule Messages
-                          </>
-                        ) : (
-                          <>
-                            <Send className="mr-2 h-4 w-4" />
-                            Send Messages
-                          </>
-                        )}
-                      </>
-                    )}
-                  </Button>
-
-                  {status && (
-                    <Alert variant={status.includes('Error') || status.includes('Failed') ? 'destructive' : 'default'}>
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription>{status}</AlertDescription>
-                    </Alert>
-                  )}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
                 </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-lg font-medium text-zinc-300">Recent Messages</h3>
-                    <Badge variant="outline" className="text-zinc-400 border-zinc-700">
-                      Last {messageHistory.length} messages
-                    </Badge>
-                  </div>
-                  <div className="bg-zinc-900 rounded-lg border border-zinc-800">
-                    <div className="max-h-[300px] overflow-y-auto scrollbar-thin scrollbar-track-zinc-900 scrollbar-thumb-zinc-700">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="hover:bg-zinc-800/50">
-                            <TableHead className="text-zinc-400 sticky top-0 bg-zinc-900">Number</TableHead>
-                            <TableHead className="text-zinc-400 sticky top-0 bg-zinc-900">Status</TableHead>
-                            <TableHead className="text-zinc-400 sticky top-0 bg-zinc-900">Schedule</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {messageHistory.map((msg, idx) => (
-                            <TableRow key={idx} className="hover:bg-zinc-800/50">
-                              <TableCell className="text-zinc-300">{msg.number}</TableCell>
-                              <TableCell>
-                                {msg.status ? (
-                                  <Badge variant="outline" className="bg-green-950/30 text-green-400 border-green-800">
-                                    <CheckCircle2 className="h-3 w-3 mr-1" />
-                                    {msg.scheduledTime ? 'Scheduled' : 'Sent'}
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="outline" className="bg-red-950/30 text-red-400 border-red-800">
-                                    <XCircle className="h-3 w-3 mr-1" />
-                                    Failed
-                                  </Badge>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-zinc-400">
-                                {msg.scheduledTime ? (
-                                  <div className="flex items-center">
-                                    <Clock className="h-3 w-3 mr-1" />
-                                    {msg.scheduledTime}
-                                  </div>
-                                ) : (
-                                  <span className="text-zinc-500">-</span>
-                                )}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                          {messageHistory.length === 0 && (
-                            <TableRow>
-                              <TableCell colSpan={3} className="text-center text-zinc-500 py-8">
-                                No messages sent yet
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </div>
-
-                  <div style={{ marginTop: '2rem' }}>
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-lg font-medium text-zinc-300">Added Numbers</h3>
-                      <Badge variant="outline" className="text-zinc-400 border-zinc-700">
-                        {numbers.length} numbers
-                      </Badge>
-                    </div>
-                    <div className="border border-zinc-800 rounded-lg">
-                      <div className="max-h-[250px] overflow-y-auto scrollbar-thin scrollbar-track-zinc-900 scrollbar-thumb-zinc-700">
-                        {numbers.length === 0 ? (
-                          <div className="p-4 text-center text-zinc-500">
-                            No numbers added yet
-                          </div>
-                        ) : (
-                          <div className="divide-y divide-zinc-800">
-                            {numbers.map((entry, index) => (
-                              <div 
-                                key={index} 
-                                className={`flex items-center justify-between p-3 ${
-                                  isSafeMode && currentSendingIndex === index 
-                                    ? 'bg-green-900/20' 
-                                    : 'hover:bg-zinc-900/50'
-                                }`}
-                              >
-                                <div className="flex items-center gap-2">
-                                  <span className="text-zinc-200">{entry.number}</span>
-                                  {isSafeMode && currentSendingIndex === index && (
-                                    <Badge variant="outline" className="bg-green-950/30 text-green-400 border-green-800">
-                                      <Loader2 className="h-3 w-3 mr-1 animate-spin" />
-                                      Sending...
-                                    </Badge>
-                                  )}
-                                </div>
-                                <div className="flex items-center gap-2">
-                                  {!isSendingInProgress && (
-                                    <>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => handleDecreaseRepeat(index)}
-                                        className="h-7 w-7 p-0 bg-zinc-800 hover:bg-zinc-700"
-                                      >
-                                        <Minus className="h-3 w-3" />
-                                      </Button>
-                                      <span className="text-zinc-200 min-w-[1.5rem] text-center">
-                                        {entry.repeatCount || 1}
-                                      </span>
-                                      <Button
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() => handleIncreaseRepeat(index)}
-                                        className="h-7 w-7 p-0 bg-zinc-800 hover:bg-zinc-700"
-                                      >
-                                        <Plus className="h-3 w-3" />
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant="destructive"
-                                        onClick={() => handleRemoveNumber(index)}
-                                        className="h-7 w-7 p-0"
-                                      >
-                                        <X className="h-3 w-3" />
-                                      </Button>
-                                    </>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={addRecipient}
+                  className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                >
+                  <Plus className="h-5 w-5 mr-2" />
+                  Add Recipient
+                </Button>
               </div>
-            </div>
-          </Card>
-        </TabsContent>
 
-        <TabsContent value="groups">
-          <Card className="p-6 bg-black border-zinc-800">
-            <div className="space-y-6">
-              <div className="grid md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <Label className="text-zinc-400 font-medium">Message</Label>
                 <div className="space-y-4">
-                  <div>
-                    <label className="block text-sm font-medium text-zinc-400 mb-2">Message Content</label>
-                    <Textarea
-                      value={message}
-                      onChange={(e) => setMessage(e.target.value)}
-                      placeholder="Type your message here..."
-                      className="h-32 bg-zinc-900 border-zinc-800 text-zinc-200 resize-none"
-                    />
-                    <p className="text-xs text-zinc-500 mt-1">
-                      {message.length} characters
-                    </p>
+                  <div className="flex gap-3 flex-wrap items-center">
+                    <Select
+                      onValueChange={handleVariableSelect}
+                      defaultValue=""
+                    >
+                      <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200 h-10">
+                        <SelectValue placeholder="Insert variable" />
+                      </SelectTrigger>
+                      <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                        <SelectItem value="name">Name</SelectItem>
+                        <SelectItem value="number">Number</SelectItem>
+                        {Array.from({ length: 10 }, (_, i) => (
+                          <SelectItem key={i} value={`variable ${i + 1}`}>
+                            Variable {i + 1}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => applyFormatting('bold')}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
+                    >
+                      <Bold className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => applyFormatting('italic')}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
+                    >
+                      <Italic className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => applyFormatting('strikeThrough')}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
+                    >
+                      <Strikethrough className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => applyFormatting('insertUnorderedList')}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
+                    >
+                      <List className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => applyFormatting('formatBlock')}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
+                    >
+                      <Quote className="h-5 w-5" />
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => applyFormatting('code')}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
+                    >
+                      <Code className="h-5 w-5" />
+                    </Button>
                   </div>
-
-                  <div className="space-y-4">
-                    <label className="block text-sm font-medium text-zinc-400">Media (Optional)</label>
-                    <div className="grid grid-cols-3 gap-4">
-                      <div>
-                        <input
-                          type="file"
-                          accept="image/*"
-                          onChange={handleImageChange}
-                          className="hidden"
-                          id="group-image-upload"
-                        />
-                        <label
-                          htmlFor="group-image-upload"
-                          className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700"
-                        >
-                          <ImageIcon className="h-6 w-6 text-zinc-400 mb-2" />
-                          <span className="text-sm text-zinc-400">Image</span>
-                        </label>
-                      </div>
-                      <div>
-                        <input
-                          type="file"
-                          accept="video/*"
-                          onChange={handleVideoChange}
-                          className="hidden"
-                          id="group-video-upload"
-                        />
-                        <label
-                          htmlFor="group-video-upload"
-                          className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700"
-                        >
-                          <Video className="h-6 w-6 text-zinc-400 mb-2" />
-                          <span className="text-sm text-zinc-400">Video</span>
-                        </label>
-                      </div>
-                      <div>
-                        <input
-                          type="file"
-                          onChange={handleDocumentChange}
-                          className="hidden"
-                          id="group-document-upload"
-                        />
-                        <label
-                          htmlFor="group-document-upload"
-                          className="flex flex-col items-center justify-center p-4 border-2 border-dashed border-zinc-800 rounded-lg cursor-pointer hover:border-zinc-700"
-                        >
-                          <FileText className="h-6 w-6 text-zinc-400 mb-2" />
-                          <span className="text-sm text-zinc-400">Document</span>
-                        </label>
-                      </div>
-                    </div>
-
-                    {imagePreview && (
-                      <div className="relative">
-                        <img
-                          src={imagePreview}
-                          alt="Preview"
-                          className="max-h-40 rounded-lg"
-                        />
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="absolute top-2 right-2"
-                          onClick={() => {
-                            setSelectedImage(null);
-                            setImagePreview(null);
-                          }}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-
-                    {videoPreview && (
-                      <div className="relative">
-                        <video
-                          src={videoPreview}
-                          controls
-                          className="max-h-40 rounded-lg"
-                        />
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          className="absolute top-2 right-2"
-                          onClick={() => {
-                            setSelectedVideo(null);
-                            setVideoPreview(null);
-                          }}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-
-                    {documentName && (
-                      <div className="flex items-center justify-between p-3 bg-zinc-900 rounded-lg">
-                        <div className="flex items-center">
-                          <File className="h-5 w-5 text-zinc-400 mr-2" />
-                          <span className="text-zinc-200">{documentName}</span>
-                        </div>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          onClick={() => {
-                            setSelectedDocument(null);
-                            setDocumentName(null);
-                          }}
-                        >
-                          <X className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="space-y-4">
-                    <label className="block text-sm font-medium text-zinc-400 mb-2">
-                      Select Groups
-                    </label>
-                    <div className="space-y-3">
-                      <div className="relative">
-                        <Search className="absolute left-3 top-3 h-4 w-4 text-zinc-500" />
-                        <Input
-                          value={groupSearchQuery}
-                          onChange={(e) => setGroupSearchQuery(e.target.value)}
-                          placeholder="Search groups..."
-                          className="pl-9 bg-zinc-900 border-zinc-800 text-zinc-200"
-                        />
-                      </div>
-                      <div className="border border-zinc-800 rounded-lg max-h-[300px] overflow-y-auto">
-                        {isLoadingGroups ? (
-                          <div className="p-4 text-center text-zinc-400">
-                            <Loader2 className="h-5 w-5 animate-spin mx-auto mb-2" />
-                            Loading groups...
-                          </div>
-                        ) : filteredGroups.length === 0 ? (
-                          <div className="p-4 text-center text-zinc-400">
-                            {groups.length === 0 ? 'No groups found' : 'No groups match your search'}
-                          </div>
-                        ) : (
-                          <div className="divide-y divide-zinc-800">
-                            {filteredGroups.map((group) => (
-                              <div
-                                key={group.id}
-                                className="flex items-center justify-between p-3 hover:bg-zinc-900/50 cursor-pointer"
-                                onClick={() => toggleGroupSelection(group.id)}
-                              >
-                                <div className="flex items-center gap-3">
-                                  <div className={`p-2 rounded-lg ${
-                                    selectedGroups.includes(group.id)
-                                      ? 'bg-green-500/10 text-green-500'
-                                      : 'bg-zinc-800/50 text-zinc-400'
-                                  }`}>
-                                    <Users className="h-4 w-4" />
-                                  </div>
-                                  <div>
-                                    <p className="text-zinc-200 font-medium">{group.name}</p>
-                                    <p className="text-zinc-400 text-sm">
-                                      {group.participantsCount} participants
-                                    </p>
-                                  </div>
-                                </div>
-                                {selectedGroups.includes(group.id) && (
-                                  <Check className="h-5 w-5 text-green-500" />
-                                )}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      <p className="text-sm text-zinc-400">
-                        Selected {selectedGroups.length} groups
-                        {groupSearchQuery && ` • Showing ${filteredGroups.length} results`}
-                      </p>
-                    </div>
-                  </div>
-
-                  <Button
-                    onClick={handleSendToGroups}
-                    disabled={isSending || (!message && !selectedImage && !selectedVideo && !selectedDocument) || selectedGroups.length === 0}
-                    className="w-full bg-zinc-800 text-zinc-200 hover:bg-zinc-700"
-                  >
-                    {isSending ? (
-                      <>
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        Sending Messages...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="mr-2 h-4 w-4" />
-                        Send to Groups
-                      </>
-                    )}
-                  </Button>
-
-                  {status && (
-                    <Alert variant={status.includes('Error') || status.includes('Failed') ? 'destructive' : 'default'}>
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertDescription>{status}</AlertDescription>
-                    </Alert>
-                  )}
+                  <div
+                    ref={editorRef}
+                    contentEditable
+                    className="bg-zinc-800 border border-zinc-700 text-zinc-200 rounded-md p-4 min-h-[200px] focus:outline-none focus:ring-2 focus:ring-zinc-700 text-lg"
+                    onInput={handleInput}
+                    style={{
+                      whiteSpace: 'pre-wrap',
+                      fontSize: '18px',
+                    }}
+                  />
                 </div>
+              </div>
 
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-lg font-medium text-zinc-300">Group Message History</h3>
-                    <Badge variant="outline" className="text-zinc-400 border-zinc-700">
-                      Last {groupMessageHistory.length} messages
-                    </Badge>
+              <div className="space-y-2">
+                <Label className="text-zinc-400 font-medium">Delay Range (seconds)</Label>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <Label className="text-zinc-400 mb-2">Start</Label>
+                    <Input
+                      type="number"
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                      placeholder="Start delay"
+                      value={delayRange.start}
+                      onChange={(e) => setDelayRange({ ...delayRange, start: parseInt(e.target.value) || 0 })}
+                      min="0"
+                    />
                   </div>
-                  <div className="bg-zinc-900 rounded-lg border border-zinc-800">
-                    <div className="max-h-[400px] overflow-y-auto">
-                      <Table>
-                        <TableHeader>
-                          <TableRow className="hover:bg-zinc-800/50">
-                            <TableHead className="text-zinc-400">Group</TableHead>
-                            <TableHead className="text-zinc-400">Status</TableHead>
-                            <TableHead className="text-zinc-400">Time</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {groupMessageHistory.map((msg, idx) => (
-                            <TableRow key={idx} className="hover:bg-zinc-800/50">
-                              <TableCell className="text-zinc-300">{msg.groupName}</TableCell>
-                              <TableCell>
-                                {msg.status === 'success' ? (
-                                  <Badge variant="outline" className="bg-green-950/30 text-green-400 border-green-800">
-                                    <CheckCircle2 className="h-3 w-3 mr-1" />
-                                    Sent
-                                  </Badge>
-                                ) : (
-                                  <Badge variant="outline" className="bg-red-950/30 text-red-400 border-red-800">
-                                    <XCircle className="h-3 w-3 mr-1" />
-                                    Failed
-                                  </Badge>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-zinc-400">
-                                {msg.time}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                          {groupMessageHistory.length === 0 && (
-                            <TableRow>
-                              <TableCell colSpan={3} className="text-center text-zinc-500 py-8">
-                                No messages sent yet
-                              </TableCell>
-                            </TableRow>
-                          )}
-                        </TableBody>
-                      </Table>
-                    </div>
+                  <div>
+                    <Label className="text-zinc-400 mb-2">End</Label>
+                    <Input
+                      type="number"
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                      placeholder="End delay"
+                      value={delayRange.end}
+                      onChange={(e) => setDelayRange({ ...delayRange, end: parseInt(e.target.value) || 0 })}
+                      min="0"
+                    />
                   </div>
                 </div>
               </div>
-            </div>
-          </Card>
-        </TabsContent>
-      </Tabs>
+            </CardContent>
+            <CardFooter className="p-6 flex justify-end">
+              <Button
+                type="submit"
+                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                disabled={isSending}
+              >
+                {isSending ? (
+                  <>
+                    <Loader2 className="h-5 w-5 animate-spin mr-2" />
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    <Send className="h-5 w-5 mr-2" />
+                    Send Messages
+                  </>
+                )}
+              </Button>
+            </CardFooter>
+          </form>
+        </Card>
+      )}
+
+      <Dialog open={responseDialogOpen} onOpenChange={setResponseDialogOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 rounded-xl sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold">Send Results</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Results of the message sending operation
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-6">
+            <Table>
+              <TableHeader>
+                <TableRow className="border-zinc-800">
+                  <TableHead className="text-zinc-400">Phone</TableHead>
+                  <TableHead className="text-zinc-400">Instance ID</TableHead>
+                  <TableHead className="text-zinc-400">Status</TableHead>
+                  <TableHead className="text-zinc-400">Message</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {sendResponses.map((response, index) => (
+                  <TableRow key={index} className="border-zinc-800">
+                    <TableCell className="text-zinc-200">{response.phone}</TableCell>
+                    <TableCell className="text-zinc-200">{response.instanceId.slice(-4)}</TableCell>
+                    <TableCell className="text-zinc-200">
+                      {response.status ? (
+                        <CheckCircle className="h-5 w-5 text-emerald-500" />
+                      ) : (
+                        <XCircle className="h-5 w-5 text-red-500" />
+                      )}
+                    </TableCell>
+                    <TableCell className="text-zinc-200">{response.message}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Import Excel Modal */}
+      <Dialog open={importModalOpen} onOpenChange={(open) => {
+        setImportModalOpen(open);
+        if (!open) {
+          setExcelData([]);
+          setExcelHeaders([]);
+          setIsExcelDataLoaded(false);
+          setSelectedHeaderRow(0);
+          setShowColumnMapping(false);
+          setColumnMappings({});
+        }
+      }}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 rounded-xl sm:max-w-5xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold">Upload Excel File</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              (Phone number is mandatory)
+            </DialogDescription>
+          </DialogHeader>
+          <div className="p-6 space-y-6">
+            {!isExcelDataLoaded ? (
+              <div className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-700 rounded-lg py-12">
+                <Label className="text-zinc-400 mb-4">Upload .xlsx, .xls or .csv file</Label>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="bg-blue-600 hover:bg-blue-700 text-white border-none"
+                  onClick={() => document.getElementById('file-upload')?.click()}
+                >
+                  Select file
+                </Button>
+                <input
+                  id="file-upload"
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={handleFileUpload}
+                />
+              </div>
+            ) : !showColumnMapping ? (
+              <div className="space-y-4">
+                <Label className="text-zinc-400 font-medium">Select header row</Label>
+                <div className="overflow-x-auto">
+                  <Table className="min-w-full">
+                    <TableHeader>
+                      <TableRow className="border-zinc-800">
+                        <TableHead className="text-zinc-400 w-8"></TableHead>
+                        {excelHeaders.map((header, idx) => (
+                          <TableHead key={idx} className="text-zinc-400">
+                            {header}
+                            {header.toLowerCase() === 'name' && <span className="text-xs text-zinc-500 block">Optional</span>}
+                            {header.toLowerCase() === 'phone' && <span className="text-xs text-zinc-500 block">Required</span>}
+                            {header.toLowerCase().startsWith('var') && !['name', 'phone'].includes(header.toLowerCase()) && (
+                              <span className="text-xs text-zinc-500 block">Optional</span>
+                            )}
+                          </TableHead>
+                        ))}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {excelData.slice(0, 5).map((row, rowIdx) => (
+                        <TableRow key={rowIdx} className="border-zinc-800">
+                          <TableCell>
+                            <input
+                              type="radio"
+                              name="header-row"
+                              checked={selectedHeaderRow === rowIdx}
+                              onChange={() => setSelectedHeaderRow(rowIdx)}
+                            />
+                          </TableCell>
+                          {excelHeaders.map((header, colIdx) => (
+                            <TableCell key={colIdx} className="text-zinc-200">
+                              {row[header]}
+                            </TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="flex justify-end space-x-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setImportModalOpen(false);
+                      setExcelData([]);
+                      setExcelHeaders([]);
+                      setIsExcelDataLoaded(false);
+                      setSelectedHeaderRow(0);
+                    }}
+                    className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleProceedToColumnMapping}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <Label className="text-zinc-400 font-medium">Match Columns</Label>
+                <div className="overflow-x-auto">
+                  <Table className="min-w-full">
+                    <TableHeader>
+                      <TableRow className="border-zinc-800">
+                        <TableHead className="text-zinc-400">Column Name</TableHead>
+                        <TableHead className="text-zinc-400">Map To</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {excelHeaders.map((header, idx) => (
+                        <TableRow key={idx} className="border-zinc-800">
+                          <TableCell className="text-zinc-200">{header}</TableCell>
+                          <TableCell>
+                            <Select
+                              value={columnMappings[header] || 'ignore'}
+                              onValueChange={(value) => handleColumnMappingChange(header, value)}
+                            >
+                              <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                                <SelectItem value="ignore">Ignore</SelectItem>
+                                <SelectItem value="name">Name</SelectItem>
+                                <SelectItem value="phone">Phone</SelectItem>
+                                {Array.from({ length: 10 }, (_, i) => (
+                                  <SelectItem key={i} value={`variable ${i + 1}`}>
+                                    Variable {i + 1}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+                <div className="flex justify-end space-x-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => {
+                      setShowColumnMapping(false);
+                      setColumnMappings({});
+                    }}
+                    className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleImportConfirm}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    Import
+                  </Button>
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

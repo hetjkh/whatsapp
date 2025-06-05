@@ -53,7 +53,7 @@ export default function DashboardLayout({
       {/* Mobile Sidebar Toggle */}
       <button
         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-zinc-900 rounded-md text-zinc-200 hover:bg-zinc-800 transition-colors"
+        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-zinc-900 rounded-md text-zinc-200 transition-colors hover:bg-zinc-800"
       >
         {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
       </button>
@@ -107,9 +107,9 @@ export default function DashboardLayout({
                     href={link.href}
                     className={cn(
                       "flex items-center gap-3 rounded-md transition-all duration-300 ease-in-out relative",
-                      "hover:bg-zinc-800/50",
                       isSidebarOpen ? "px-3 py-2" : "px-3 py-3 justify-center",
-                      isActive ? "bg-zinc-800 text-zinc-200" : "text-zinc-400 hover:text-zinc-200"
+                      isActive ? "bg-zinc-800 text-zinc-200" : "text-zinc-400",
+                      "hover:bg-zinc-700 hover:text-zinc-100 hover:scale-[1.02] transform"
                     )}
                   >
                     <Icon className="h-5 w-5 flex-shrink-0" />
@@ -120,16 +120,6 @@ export default function DashboardLayout({
                       {link.title}
                     </span>
                   </Link>
-                  
-                  {/* Tooltip for collapsed state */}
-                  {!isSidebarOpen && (
-                    <div className={cn(
-                      "hidden lg:block absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-zinc-800 text-zinc-200 text-sm rounded opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 whitespace-nowrap z-50"
-                    )}>
-                      {link.title}
-                      <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-zinc-800"></div>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -141,8 +131,8 @@ export default function DashboardLayout({
               onClick={() => setIsSidebarOpen(!isSidebarOpen)}
               className={cn(
                 "flex items-center gap-3 w-full rounded-md transition-all duration-300 ease-in-out",
-                "hover:bg-zinc-800/50 text-zinc-400 hover:text-zinc-200",
-                isSidebarOpen ? "px-3 py-2" : "px-3 py-3 justify-center"
+                isSidebarOpen ? "px-3 py-2" : "px-3 py-3 justify-center",
+                "text-zinc-400 hover:bg-zinc-700 hover:text-zinc-100 hover:scale-[1.02] transform"
               )}
             >
               {isSidebarOpen ? (

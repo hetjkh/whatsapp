@@ -1,5 +1,4 @@
 "use client";
-
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,23 +10,22 @@ import Cookies from 'js-cookie';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
 import { Loader2 } from 'lucide-react';
-
-interface Button {
-  name: string;
-  type: 'REPLY' | 'URL' | 'PHONE_NUMBER' | 'UNSUBSCRIBE';
-  url?: string;
-}
-
 interface Template {
   _id?: string;
   name: string;
   messageType: string;
   template: {
-    header?: string;
     message: string;
+    header?: string;
     footer?: string;
     button?: Button[];
   };
+}
+interface Button {
+  name: string;
+  type: 'REPLY' | 'URL' | 'PHONE_NUMBER' | 'UNSUBSCRIBE';
+  url?: string;
+  title?: string;
 }
 
 export default function Templates() {
@@ -50,7 +48,9 @@ export default function Templates() {
   const router = useRouter();
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
   const [previewContent, setPreviewContent] = useState('');
+  const [previewButtons, setPreviewButtons] = useState<Button[]>([]);
 
+  // Fetch templates
   const fetchTemplates = async () => {
     const token = Cookies.get('token');
     if (!token) {
@@ -75,12 +75,11 @@ export default function Templates() {
         );
         setTemplates(validTemplates);
         setTotalTemplates(data.total || 0);
-        console.log('Fetched templates:', data.templates);
       } else {
         toast.error(data.message || 'Failed to fetch templates');
       }
     } catch (err) {
-      toast.error('Error fetching templates: ' + err.message);
+      toast.error('Error fetching templates: ' );
     } finally {
       setIsLoading(false);
     }
@@ -89,6 +88,17 @@ export default function Templates() {
   useEffect(() => {
     fetchTemplates();
   }, [router, currentPage]);
+
+  // Initialize editor content when modal opens or editingTemplate changes
+  useEffect(() => {
+    if (isModalOpen && editorRef.current && editingTemplate) {
+      editorRef.current.innerText = editingTemplate.template.message || '';
+      setMessage(editingTemplate.template.message || '');
+    } else if (isModalOpen && editorRef.current) {
+      editorRef.current.innerText = '';
+      setMessage('');
+    }
+  }, [isModalOpen, editingTemplate]);
 
   const totalPages = Math.ceil(totalTemplates / templatesPerPage);
 
@@ -104,19 +114,11 @@ export default function Templates() {
     }
   };
 
-  const initializeEditorContent = useCallback((content: string) => {
-    if (editorRef.current) {
-      editorRef.current.innerText = content;
-      setMessage(content);
-    }
-  }, []);
-
   const handleOpenModal = (template?: Template) => {
     if (template) {
       setEditingTemplate(template);
       setTemplateName(template.name || '');
       setMessageType(template.messageType || '');
-      setMessage(template.template.message || '');
       setButtons(
         template.template.button?.map(btn => ({
           name: btn.name || btn.title || '',
@@ -126,7 +128,7 @@ export default function Templates() {
       );
       setHeader(template.messageType === 'Buttons' ? template.template.header || '' : '');
       setFooter(template.messageType === 'Buttons' ? template.template.footer || '' : '');
-      initializeEditorContent(template.template.message || '');
+      setMessage(template.template.message || '');
     } else {
       setEditingTemplate(null);
       setTemplateName('');
@@ -135,7 +137,6 @@ export default function Templates() {
       setButtons([{ name: '', type: 'REPLY' }]);
       setHeader('');
       setFooter('');
-      initializeEditorContent('');
     }
     setIsModalOpen(true);
   };
@@ -211,7 +212,7 @@ export default function Templates() {
         toast.error(data.message || 'Failed to save template');
       }
     } catch (err) {
-      toast.error('Error saving template: ' + err.message);
+      toast.error('Error saving template: ' );
     } finally {
       setIsSubmitting(false);
     }
@@ -322,14 +323,24 @@ export default function Templates() {
       const data = await response.json();
 
       if (data.status) {
+        const updatedTotal = totalTemplates - 1;
         setTemplates(templates.filter(t => t._id !== id));
-        setTotalTemplates(totalTemplates - 1);
+        setTotalTemplates(updatedTotal);
+
+        // Adjust currentPage if necessary
+        const newTotalPages = Math.ceil(updatedTotal / templatesPerPage);
+        if (currentPage > newTotalPages && newTotalPages > 0) {
+          setCurrentPage(newTotalPages);
+        } else if (newTotalPages === 0) {
+          setCurrentPage(1);
+        }
+
         toast.success(data.message || 'Template deleted successfully');
       } else {
         toast.error(data.message || 'Failed to delete template');
       }
     } catch (err) {
-      toast.error('Error deleting template: ' + err.message);
+      toast.error('Error deleting template: ' );
     } finally {
       setIsDeleting(prev => ({ ...prev, [id]: false }));
     }
@@ -341,14 +352,12 @@ export default function Templates() {
       if (template.template.header) {
         content = `Header: ${template.template.header}\n${content}`;
       }
-      if (template.template.button && template.template.button.length > 0) {
-        content += `\nButtons:\n${template.template.button.map((btn, idx) => `Button ${idx + 1}: ${btn.title || btn.name || 'N/A'} (${btn.type})${btn.url ? ` - URL: ${btn.url}` : ''}`).join('\n')}`;
-      }
       if (template.template.footer) {
         content += `\nFooter: ${template.template.footer}`;
       }
     }
     setPreviewContent(content);
+    setPreviewButtons(template.template.button || []);
     setIsPreviewOpen(true);
   };
 
@@ -374,7 +383,7 @@ export default function Templates() {
     if (!selection || !selection.rangeCount) return;
 
     const range = selection.getRangeAt(0);
-    const placeholder = value === 'name' ? '{{name}}' : value === 'number' ? '{{number}}' : `{{var${value.split(' ')[1]}}}`;
+    const placeholder = value === 'name skylight' ? '{{name}}' : value === 'number' ? '{{number}}' : `{{var${value.split(' ')[1]}}}`;
     range.insertNode(document.createTextNode(placeholder));
     range.collapse(false);
     selection.removeAllRanges();
@@ -421,51 +430,49 @@ export default function Templates() {
           <Card className="bg-black border-zinc-800 p-8">
             <Table>
               <TableHeader>
-                <TableRow className="border-zinc-800">
-                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">ID</TableHead>
-                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Name</TableHead>
-                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Message Type</TableHead>
-                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Message</TableHead>
-                  <TableHead className="text-zinc-400 font-semibold text-lg py-4">Actions</TableHead>
+                <TableRow className="border-zinc-800 hover:bg-zinc-900">
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4 w-1/4 text-left">Name</TableHead>
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4 w-1/4 text-left">Message Type</TableHead>
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4 w-1/4 text-left">Message</TableHead>
+                  <TableHead className="text-zinc-400 font-semibold text-lg py-4 w-1/4 text-left">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {templates.map(template => (
-                  <TableRow key={template._id || Math.random().toString()} className="border-zinc-800">
-                    <TableCell className="text-zinc-200 py-4">{template._id || 'N/A'}</TableCell>
-                    <TableCell className="text-zinc-200 py-4">{template.name || 'Unnamed'}</TableCell>
-                    <TableCell className="text-zinc-200 py-4">{template.messageType || 'N/A'}</TableCell>
-                    <TableCell className="text-zinc-200 py-4">
+                  <TableRow key={template._id || Math.random().toString()} className="border-zinc-800 hover:bg-zinc-900">
+                    <TableCell className="text-zinc-200 py-4 w-1/4 text-left">{template.name || 'Unnamed'}</TableCell>
+                    <TableCell className="text-zinc-200 py-4 w-1/4 text-left">{template.messageType || 'N/A'}</TableCell>
+                    <TableCell className="text-zinc-200 py-4 w-1/4 text-left">
                       <Button
                         variant="ghost"
                         onClick={() => handlePreview(template)}
-                        className="text-zinc-400 hover:text-zinc-200 text-base"
+                        className="text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 text-base px-2 py-1"
                       >
-                        <Eye className="h-5 w-5 mr-2" />
+                        <Eye className="h-5 w-5 mr-1" />
                         Preview
                       </Button>
                     </TableCell>
-                    <TableCell className="text-zinc-200 py-4">
-                      <div className="flex gap-4">
+                    <TableCell className="text-zinc-200 py-4 w-1/4 text-left">
+                      <div className="flex gap-2">
                         <Button
                           variant="ghost"
                           onClick={() => handleOpenModal(template)}
-                          className="text-zinc-400 hover:text-zinc-200 text-base"
+                          className="text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 text-base px-2 py-1"
                           disabled={isDeleting[template._id || ''] || !template._id}
                         >
-                          <Edit className="h-5 w-5 mr-2" />
+                          <Edit className="h-5 w-5 mr-1" />
                           Edit
                         </Button>
                         <Button
                           variant="ghost"
                           onClick={() => template._id && handleDelete(template._id)}
-                          className="text-zinc-400 hover:text-zinc-200 text-base"
+                          className="text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 text-base px-2 py-1"
                           disabled={isDeleting[template._id || ''] || !template._id}
                         >
                           {isDeleting[template._id || ''] ? (
                             <Loader2 className="h-5 w-5 animate-spin" />
                           ) : (
-                            <Trash className="h-5 w-5 mr-2" />
+                            <Trash className="h-5 w-5 mr-1" />
                           )}
                           Delete
                         </Button>
@@ -486,7 +493,7 @@ export default function Templates() {
                 variant="outline"
                 onClick={handlePreviousPage}
                 disabled={currentPage === 1 || isLoading}
-                className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 px-6 py-3 text-base"
+                className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 px-6 py-3 text-base"
               >
                 Previous
               </Button>
@@ -494,7 +501,7 @@ export default function Templates() {
                 variant="outline"
                 onClick={handleNextPage}
                 disabled={currentPage === totalPages || isLoading}
-                className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 px-6 py-3 text-base"
+                className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 px-6 py-3 text-base"
               >
                 Next
               </Button>
@@ -515,6 +522,30 @@ export default function Templates() {
           <DialogDescription className="text-zinc-400 text-lg leading-relaxed whitespace-pre-wrap mt-4">
             {previewContent}
           </DialogDescription>
+          {previewButtons.length > 0 && (
+            <div className="mt-4 flex flex-col gap-2">
+              {previewButtons.map((btn, idx) => (
+                <Button
+                  key={idx}
+                  variant={btn.type === 'URL' ? 'default' : 'outline'}
+                  className={
+                    btn.type === 'URL'
+                      ? 'bg-blue-600 text-white hover:bg-blue-700'
+                      : 'bg-transparent border-zinc-500 text-zinc-200 hover:bg-zinc-700'
+                  }
+                  onClick={() => {
+                    if (btn.type === 'URL' && btn.url) {
+                      window.open(btn.url, '_blank');
+                    } else {
+                      toast.success(`Quick Reply: ${btn.title || btn.name}`);
+                    }
+                  }}
+                >
+                  {btn.title || btn.name || `Button ${idx + 1}`}
+                </Button>
+              ))}
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -528,7 +559,7 @@ export default function Templates() {
               <Button
                 variant="ghost"
                 onClick={handleCloseModal}
-                className="text-zinc-400 hover:text-zinc-200"
+                className="text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700"
               >
                 <X className="h-6 w-6" />
               </Button>
@@ -548,10 +579,10 @@ export default function Templates() {
                   </div>
                 </div>
                 <div className="flex-1">
-                  <label className Yisummary="text-base font-medium text-zinc-400 mb-2 block">Message Type</label>
+                  <label className="text-base font-medium text-zinc-400 mb-2 block">Message Type</label>
                   <div className="relative">
                     <select
-                      className="w-full pl-10 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base"
+                      className="w-full pl-10 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base transition-all duration-300 ease-in-out"
                       value={messageType}
                       onChange={(e) => setMessageType(e.target.value)}
                     >
@@ -596,7 +627,7 @@ export default function Templates() {
                 <div className="space-y-4">
                   <div className="flex gap-3 flex-wrap items-center">
                     <select
-                      className="pl-3 pr-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-10 text-base"
+                      className="pl-3 pr-4 py-2 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-10 text-base transition-all duration-300 ease-in-out"
                       onChange={(e) => handleVariableSelect(e.target.value)}
                       defaultValue=""
                     >
@@ -613,7 +644,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('bold')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
                     >
                       <Bold className="h-5 w-5" />
                     </Button>
@@ -621,7 +652,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('italic')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
                     >
                       <Italic className="h-5 w-5" />
                     </Button>
@@ -629,7 +660,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('strikeThrough')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
                     >
                       <Strikethrough className="h-5 w-5" />
                     </Button>
@@ -637,7 +668,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('insertUnorderedList')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
                     >
                       <List className="h-5 w-5" />
                     </Button>
@@ -645,7 +676,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('formatBlock')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
                     >
                       <Quote className="h-5 w-5" />
                     </Button>
@@ -653,7 +684,7 @@ export default function Templates() {
                       type="button"
                       variant="outline"
                       onClick={() => applyFormatting('code')}
-                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-4"
+                      className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10 px-4"
                     >
                       <Code className="h-5 w-5" />
                     </Button>
@@ -689,7 +720,7 @@ export default function Templates() {
                         <div className="flex-1">
                           <label className="text-base font-medium text-zinc-400 mb-2 block">Type</label>
                           <select
-                            className="w-full pl-3 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base"
+                            className="w-full pl-3 pr-4 py-3 bg-zinc-900 border border-zinc-800 text-zinc-200 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-700 h-12 text-base transition-all duration-300 ease-in-out"
                             value={button.type}
                             onChange={(e) => handleButtonChange(index, 'type', e.target.value as Button['type'])}
                           >
@@ -720,7 +751,7 @@ export default function Templates() {
                     type="button"
                     variant="outline"
                     onClick={addButton}
-                    className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-10 px-6 mt-4"
+                    className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-10 px-6 mt-4"
                   >
                     <Plus className="h-5 w-5 mr-2" />
                     Add Button
@@ -732,7 +763,7 @@ export default function Templates() {
                   type="button"
                   variant="outline"
                   onClick={handleCloseModal}
-                  className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-800 h-12 px-6 text-base"
+                  className="bg-zinc-900 border-zinc-800 text-zinc-200 hover:bg-zinc-700 h-12 px-6 text-base"
                   disabled={isSubmitting}
                 >
                   Cancel
