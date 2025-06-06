@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, useRef } from 'react';
@@ -9,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
-import { Plus, Send, Trash2, Loader2, CheckCircle, XCircle, ChevronDown, Bold, Italic, Strikethrough, List, Quote, Code, Upload } from 'lucide-react';
+import { Plus, Send, Trash2, Loader2, CheckCircle, XCircle, ChevronDown, Bold, Italic, Strikethrough, List, Quote, Code, Upload, Link } from 'lucide-react';
 import Cookies from 'js-cookie';
 import { useRouter } from 'next/navigation';
 import { Toaster, toast } from 'react-hot-toast';
@@ -23,7 +22,7 @@ interface Template {
     message: string;
     header?: string;
     footer?: string;
-    button?: Array<{ name: string; type: string; url?: string }>;
+    button?: Array<{ name: string; type: string; url?: string; title?: string }>;
   };
 }
 
@@ -53,6 +52,12 @@ interface ExcelRow {
   [key: string]: string;
 }
 
+interface Button {
+  name: string;
+  type: 'REPLY' | 'URL' | 'PHONE_NUMBER' | 'UNSUBSCRIBE';
+  url?: string;
+}
+
 export default function MessagingPage() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [instances, setInstances] = useState<Instance[]>([]);
@@ -68,6 +73,7 @@ export default function MessagingPage() {
   const [sendResponses, setSendResponses] = useState<SendResponse[]>([]);
   const [isInstanceDropdownOpen, setIsInstanceDropdownOpen] = useState(false);
   const [message, setMessage] = useState('');
+  const [buttons, setButtons] = useState<Button[]>([]);
   const editorRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -121,7 +127,7 @@ export default function MessagingPage() {
           toast.error(instanceData.message || 'Failed to fetch instances');
         }
       } catch (err) {
-        toast.error('Error fetching data: ' );
+        toast.error('Error fetching data: ');
       } finally {
         setIsLoading(false);
       }
@@ -130,15 +136,27 @@ export default function MessagingPage() {
     fetchData();
   }, [router]);
 
-  // Update message when template is selected
+  // Update message and buttons when template is selected
   useEffect(() => {
     const selectedTemplateObj = templates.find((t) => t._id === selectedTemplate);
     if (selectedTemplateObj && editorRef.current) {
       editorRef.current.innerText = selectedTemplateObj.template.message || '';
       setMessage(selectedTemplateObj.template.message || '');
+      if (selectedTemplateObj.messageType === 'Buttons') {
+        setButtons(
+          selectedTemplateObj.template.button?.map(btn => ({
+            name: btn.title || btn.name || '',
+            type: btn.type as 'REPLY' | 'URL' | 'PHONE_NUMBER' | 'UNSUBSCRIBE',
+            url: btn.url,
+          })) || []
+        );
+      } else {
+        setButtons([]);
+      }
     } else if (editorRef.current) {
       editorRef.current.innerText = '';
       setMessage('');
+      setButtons([]);
     }
   }, [selectedTemplate, templates]);
 
@@ -288,6 +306,21 @@ export default function MessagingPage() {
     setMessage(editor.innerText);
   };
 
+  // Handle button changes
+  const handleButtonChange = (index: number, field: keyof Button, value: string) => {
+    const newButtons = [...buttons];
+    newButtons[index] = { ...newButtons[index], [field]: value };
+    if (field === 'type' && value !== 'URL') {
+      delete newButtons[index].url;
+    }
+    setButtons(newButtons);
+  };
+
+  // Add new button
+  const addButton = () => {
+    setButtons([...buttons, { name: '', type: 'REPLY' }]);
+  };
+
   // Handle Excel file upload
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -353,7 +386,9 @@ export default function MessagingPage() {
     // Initialize column mappings based on header names
     const initialMappings: { [key: string]: string } = {};
     excelHeaders.forEach((header) => {
-      const lowerHeader = header.toLowerCase();
+     
+
+ const lowerHeader = header.toLowerCase();
       if (lowerHeader === 'name') {
         initialMappings[header] = 'name';
       } else if (lowerHeader === 'phone') {
@@ -431,7 +466,7 @@ export default function MessagingPage() {
   };
 
   // Create temporary template
-  const createTempTemplate = async (message: string) => {
+  const createTempTemplate = async (message: string, buttons: Button[]) => {
     const token = Cookies.get('token');
     if (!token) return null;
 
@@ -444,13 +479,15 @@ export default function MessagingPage() {
       template: {
         message,
         ...(selectedTemplateObj.messageType === 'Buttons' && {
-          header: selectedTemplateObj.template.header || '',
-          footer: selectedTemplateObj.template.footer || '',
-          button: selectedTemplateObj.template.button?.map(btn => ({
-            name: btn.name,
-            type: btn.type,
-            ...(btn.url && { url: btn.url }),
-          })) || [],
+          header: selectedTemplateObj.template.header || undefined,
+          footer: selectedTemplateObj.template.footer || undefined,
+          button: buttons
+            .filter(btn => btn.name.trim() !== '')
+            .map(btn => ({
+              title: btn.name,
+              type: btn.type,
+              ...(btn.type === 'URL' && { url: btn.url }),
+            })),
         }),
       },
     };
@@ -465,9 +502,13 @@ export default function MessagingPage() {
         body: JSON.stringify(payload),
       });
       const data = await response.json();
-      return data.status && data.data?._id ? data.data._id : null;
+      if (!data.status) {
+        throw new Error(data.message || 'Failed to create temporary template');
+      }
+      return data.data?._id || null;
     } catch (err) {
       console.error('Error creating temporary template:', err);
+      toast.error(`Error creating temporary template: ${err instanceof Error ? err.message : 'Unknown error'}`);
       return null;
     }
   };
@@ -524,6 +565,14 @@ export default function MessagingPage() {
       toast.error('Message cannot be empty');
       return;
     }
+    if (selectedTemplateObj?.messageType === 'Buttons' && buttons.every(btn => btn.name.trim() === '')) {
+      toast.error('At least one button must have a valid name');
+      return;
+    }
+    if (selectedTemplateObj?.messageType === 'Buttons' && buttons.some(btn => btn.type === 'URL' && (!btn.url || btn.url.trim() === ''))) {
+      toast.error('All URL buttons must have a valid URL');
+      return;
+    }
 
     const currentMessage = editorRef.current.innerText || message;
     setMessage(currentMessage);
@@ -531,9 +580,8 @@ export default function MessagingPage() {
     setIsSending(true);
     let tempTemplateId: string | null = null;
     try {
-      tempTemplateId = await createTempTemplate(currentMessage);
+      tempTemplateId = await createTempTemplate(currentMessage, buttons);
       if (!tempTemplateId) {
-        toast.error('Failed to create temporary template');
         return;
       }
 
@@ -568,7 +616,7 @@ export default function MessagingPage() {
         toast.error(data.message || 'Failed to send messages');
       }
     } catch (err) {
-      toast.error('Error sending messages: ' );
+      toast.error('Error sending messages: ');
     } finally {
       if (tempTemplateId) {
         await deleteTempTemplate(tempTemplateId);
@@ -637,42 +685,50 @@ export default function MessagingPage() {
                 </div>
                 <div className="space-y-2">
                   <Label className="text-zinc-400 font-medium">Select Instances</Label>
-                  <div className="relative">
-                    <Button
-                      type="button"
-                      className="w-full bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 justify-between"
-                      onClick={() => setIsInstanceDropdownOpen(!isInstanceDropdownOpen)}
-                    >
-                      <span>
-                        {selectedInstances.length > 0
-                          ? `${selectedInstances.length} instance${selectedInstances.length > 1 ? 's' : ''} selected`
-                          : 'Select instances'}
-                      </span>
-                      <ChevronDown className="h-4 w-4" />
-                    </Button>
-                    {isInstanceDropdownOpen && (
-                      <div className="absolute z-10 w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md shadow-lg max-h-60 overflow-auto">
-                        {instances.map((instance) => (
-                          <div
-                            key={instance._id}
-                            className={`px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-zinc-700 ${
-                              selectedInstances.includes(instance._id) ? 'bg-blue-500/10' : ''
-                            }`}
-                            onClick={() => handleInstanceToggle(instance._id)}
-                          >
-                            <div>
-                              <p className="text-zinc-200">
-                                {instance.whatsapp.phone || `Device ${instance._id.slice(-4)}`}
-                              </p>
-                              {instance.name && <p className="text-sm text-zinc-400">{instance.name}</p>}
-                            </div>
+                  <div className="flex items-center gap-4">
+                    <div className="relative flex-1">
+                      <Button
+                        type="button"
+                        className="w-full bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 justify-between"
+                        onClick={() => setIsInstanceDropdownOpen(!isInstanceDropdownOpen)}
+                      >
+                        <span>
+                          {selectedInstances.length > 0
+                            ? `${selectedInstances.length} instance${selectedInstances.length > 1 ? 's' : ''} selected`
+                            : 'Select instances'}
+                        </span>
+                        <ChevronDown className="h-4 w-4" />
+                      </Button>
+                      {isInstanceDropdownOpen && (
+                        <div className="absolute z-10 w-full mt-1 bg-zinc-800 border border-zinc-700 rounded-md shadow-lg max-h-60 overflow-auto">
+                          {instances.map((instance) => (
                             <div
-                              className={`w-4 h-4 rounded-full ${
-                                instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                              key={instance._id}
+                              className={`px-4 py-2 flex items-center justify-between cursor-pointer hover:bg-zinc-700 ${
+                                selectedInstances.includes(instance._id) ? 'bg-blue-500/10' : ''
                               }`}
-                            />
-                          </div>
-                        ))}
+                              onClick={() => handleInstanceToggle(instance._id)}
+                            >
+                              <div>
+                                <p className="text-zinc-200">
+                                  {instance.whatsapp.phone || `Device ${instance._id.slice(-4)}`}
+                                </p>
+                                {instance.name && <p className="text-sm text-zinc-400">{instance.name}</p>}
+                              </div>
+                              <div
+                                className={`w-4 h-4 rounded-full ${
+                                  instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-amber-500'
+                                }`}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {selectedTemplateObj && (
+                      <div className="flex items-center gap-2">
+                        <Label className="text-zinc-400 font-medium">Type:</Label>
+                        <span className="text-zinc-200">{selectedTemplateObj.messageType}</span>
                       </div>
                     )}
                   </div>
@@ -830,6 +886,68 @@ export default function MessagingPage() {
                   />
                 </div>
               </div>
+
+              {selectedTemplateObj?.messageType === 'Buttons' && (
+                <div className="space-y-4">
+                  <Label className="text-zinc-400 font-medium">Buttons</Label>
+                  {buttons.map((button, index) => (
+                    <div key={index} className="bg-zinc-950 p-6 rounded-md space-y-4">
+                      <h3 className="text-lg font-bold text-zinc-200">{`Button ${index + 1}`}</h3>
+                      <div className="flex flex-col sm:flex-row gap-6 items-start">
+                        <div className="flex-1">
+                          <Label className="text-base font-medium text-zinc-400 mb-2 block">Title</Label>
+                          <Input
+                            className="bg-zinc-800 border-zinc-700 text-zinc-200 h-12 text-base rounded-md"
+                            placeholder={`Enter title for Button ${index + 1}`}
+                            value={button.name}
+                            onChange={(e) => handleButtonChange(index, 'name', e.target.value)}
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <Label className="text-base font-medium text-zinc-400 mb-2 block">Type</Label>
+                          <Select
+                            value={button.type}
+                            onValueChange={(value) => handleButtonChange(index, 'type', value)}
+                          >
+                            <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200 h-12">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                              <SelectItem value="REPLY">Quick Reply</SelectItem>
+                              <SelectItem value="URL">URL</SelectItem>
+                              <SelectItem value="PHONE_NUMBER">Phone Number</SelectItem>
+                              <SelectItem value="UNSUBSCRIBE">Unsubscribe</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      {button.type === 'URL' && (
+                        <div className="flex-1">
+                          <Label className="text-base font-medium text-zinc-400 mb-2 block">URL</Label>
+                          <div className="relative">
+                            <Link className="absolute left-3 top-1/2 transform -translate-y-1/2 h-5 w-5 text-zinc-500" />
+                            <Input
+                              className="pl-10 bg-zinc-800 border-zinc-700 text-zinc-200 h-12 text-base rounded-md"
+                              placeholder="Enter URL"
+                              value={button.url || ''}
+                              onChange={(e) => handleButtonChange(index, 'url', e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={addButton}
+                    className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700 h-10 px-6"
+                  >
+                    <Plus className="h-5 w-5 mr-2" />
+                    Add Button
+                  </Button>
+                </div>
+              )}
 
               <div className="space-y-2">
                 <Label className="text-zinc-400 font-medium">Delay Range (seconds)</Label>
