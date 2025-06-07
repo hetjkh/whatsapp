@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -24,17 +25,16 @@ import {
   Strikethrough, 
   List, 
   Quote, 
+  Edit,
   Code, 
   Upload,
   Search,
   Filter,
   MoreHorizontal,
   Eye,
-  Edit,
   Calendar,
   Users,
   MessageSquare,
-  Phone,
   Clock,
   AlertCircle,
   Download,
@@ -85,21 +85,21 @@ interface Recipient {
   name: string;
   variables: { [key: string]: string };
 }
-
 interface Campaign {
   _id: string;
   name: string;
-  template: Template;
+  template: {
+    _id: string;
+    name: string;
+    messageType: string;
+  };
   instances: Instance[];
   recipients: Recipient[];
   status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'failed' | 'paused';
   totalMessages: number;
   sentMessages: number;
-  deliveredMessages: number;
   failedMessages: number;
   createdAt: string;
-  scheduledAt?: string;
-  completedAt?: string;
   delayRange: { start: number; end: number };
 }
 
@@ -188,10 +188,22 @@ export default function MessagingPage() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [excelData, setExcelData] = useState<ExcelRow[]>([]);
   const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
-  const [selectedHeaderRow, setSelectedHeaderRow] = useState<number>(0);
   const [isExcelDataLoaded, setIsExcelDataLoaded] = useState(false);
-  const [columnMappings, setColumnMappings] = useState<{ [key: string]: string }>({});
   const [showColumnMapping, setShowColumnMapping] = useState(false);
+  const [columnMappings, setColumnMappings] = useState<{ [key: string]: string }>({
+    name: '',
+    phone: '',
+    var1: '',
+    var2: '',
+    var3: '',
+    var4: '',
+    var5: '',
+    var6: '',
+    var7: '',
+    var8: '',
+    var9: '',
+    var10: ''
+  });
 
   const getToken = async (): Promise<string | null | undefined> => {
     let token: string | null | undefined = Cookies.get('token');
@@ -234,7 +246,7 @@ export default function MessagingPage() {
         },
         body: JSON.stringify({}),
       });
-      
+
       if (instanceResponse.status === 401) {
         handleUnauthorized();
         return;
@@ -245,65 +257,247 @@ export default function MessagingPage() {
         setInstances(instanceData.instances || []);
       }
 
-      // Mock campaigns data - replace with actual API call
-      const mockCampaigns: Campaign[] = [
-        {
-          _id: '1',
-          name: 'Welcome Campaign',
-          template: { _id: '1', name: 'Welcome Template', messageType: 'Text', template: { message: 'Welcome!' } },
-          instances: instanceData.instances?.slice(0, 1) || [],
-          recipients: [],
-          status: 'completed',
-          totalMessages: 150,
-          sentMessages: 150,
-          deliveredMessages: 145,
-          failedMessages: 5,
-          createdAt: new Date().toISOString(),
-          completedAt: new Date().toISOString(),
-          delayRange: { start: 3, end: 5 }
+      // Fetch campaigns from the new API
+      const campaignResponse = await fetch('https://whatsapp.recuperafly.com/api/template/message/all', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
         },
-        {
-          _id: '2',
-          name: 'Promotional Campaign',
-          template: { _id: '2', name: 'Promo Template', messageType: 'Text', template: { message: 'Special offer!' } },
-          instances: instanceData.instances?.slice(0, 1) || [],
-          recipients: [],
-          status: 'sending',
-          totalMessages: 200,
-          sentMessages: 120,
-          deliveredMessages: 115,
-          failedMessages: 5,
-          createdAt: new Date().toISOString(),
-          delayRange: { start: 2, end: 4 }
-        }
-      ];
-      
-      setCampaigns(mockCampaigns);
-      
-      // Calculate stats
-      const stats = mockCampaigns.reduce((acc, campaign) => {
-        acc.total++;
-        acc[campaign.status]++;
-        return acc;
-      }, {
-        total: 0,
-        draft: 0,
-        scheduled: 0,
-        sending: 0,
-        completed: 0,
-        failed: 0,
-        paused: 0
+        body: JSON.stringify({}),
       });
-      
-      setCampaignStats(stats);
 
+      if (campaignResponse.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      const campaignData = await campaignResponse.json();
+      if (campaignData.status) {
+        const mappedCampaigns: Campaign[] = campaignData.messages.map((msg: any) => ({
+          _id: msg._id,
+          name: msg.name,
+          // Since template details aren't fully provided in the API, use a placeholder
+          template: {
+            _id: msg.templateId,
+            name: `Template ${msg.templateId.slice(-4)}`, // Placeholder, as template name isn't in API
+            messageType: 'Text', // Placeholder, adjust based on actual template data if available
+          },
+          instances: (msg.instanceIds || [])
+            .map((id: string) => instances.find((inst: Instance) => inst._id === id))
+            .filter((inst: Instance | undefined) => inst !== undefined),
+          recipients: msg.recipients.map((rec: any) => ({
+            phone: rec.phone,
+            name: rec.name,
+            variables: {}, // No variables in API response, initialize empty
+          })),
+          status: msg.status,
+          totalMessages: msg.statistics.total,
+          sentMessages: msg.statistics.sent,
+          failedMessages: msg.statistics.failed,
+          createdAt: msg.createdAt,
+          delayRange: msg.settings.delayRange,
+        }));
+
+        setCampaigns(mappedCampaigns);
+
+        // Calculate stats
+        const stats = mappedCampaigns.reduce(
+          (acc, campaign) => {
+            acc.total++;
+            acc[campaign.status]++;
+            return acc;
+          },
+          {
+            total: 0,
+            draft: 0,
+            scheduled: 0,
+            sending: 0,
+            completed: 0,
+            failed: 0,
+            paused: 0,
+          }
+        );
+
+        setCampaignStats(stats);
+      } else {
+        toast.error(campaignData.message || 'Failed to fetch campaigns');
+      }
     } catch (err) {
       toast.error('Error fetching data: ' + (err instanceof Error ? err.message : 'Unknown error'));
     } finally {
       setIsLoading(false);
     }
-  }, [router]);
+  }, [router, instances]);
 
+  const renderCampaignsTable = () => (
+    <div className="overflow-x-auto">
+      <Table>
+        <TableHeader>
+          <TableRow className="border-zinc-800">
+            <TableHead className="text-zinc-400">Campaign</TableHead>
+            <TableHead className="text-zinc-400">Template</TableHead>
+            <TableHead className="text-zinc-400">Instances</TableHead>
+            <TableHead className="text-zinc-400">Status</TableHead>
+            <TableHead className="text-zinc-400">Messages</TableHead>
+            <TableHead className="text-zinc-400">Sent</TableHead>
+            <TableHead className="text-zinc-400">Failed</TableHead>
+            <TableHead className="text-zinc-400">Created</TableHead>
+            <TableHead className="text-zinc-400">Actions</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {currentCampaigns.map((campaign) => (
+            <TableRow key={campaign._id} className="border-zinc-800">
+              <TableCell>
+                <div>
+                  <p className="text-zinc-200 font-medium">{campaign.name}</p>
+                  <p className="text-zinc-400 text-sm">ID: {campaign._id}</p>
+                </div>
+              </TableCell>
+              <TableCell>
+                <div>
+                  <p className="text-zinc-200">{campaign.template.name}</p>
+                  <p className="text-zinc-400 text-sm">{campaign.template.messageType}</p>
+                </div>
+              </TableCell>
+              <TableCell className="text-zinc-200">{campaign.instances.length}</TableCell>
+              <TableCell>{getStatusBadge(campaign.status)}</TableCell>
+              <TableCell className="text-zinc-200">{campaign.totalMessages}</TableCell>
+              <TableCell className="text-zinc-200">{campaign.sentMessages}</TableCell>
+              <TableCell className="text-zinc-200">{campaign.failedMessages}</TableCell>
+              <TableCell className="text-zinc-400">{formatDate(campaign.createdAt)}</TableCell>
+              <TableCell>
+                <div className="flex items-center gap-2">
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedCampaign(campaign);
+                            setShowCampaignDetails(true);
+                          }}
+                          className="text-zinc-400 hover:text-zinc-200"
+                        >
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>View Details</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="text-zinc-400 hover:text-zinc-200"
+                        >
+                          <MoreHorizontal className="h-4 w-4" />
+                        </Button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        <p>More Actions</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
+                </div>
+              </TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+
+  // Update Campaign Details Dialog to remove deliveredMessages and completedAt
+  const renderCampaignDetails = () => (
+    <Dialog open={showCampaignDetails} onOpenChange={setShowCampaignDetails}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-semibold">
+            Campaign Details: {selectedCampaign?.name}
+          </DialogTitle>
+          <DialogDescription className="text-zinc-400">
+            View detailed information about this campaign
+          </DialogDescription>
+        </DialogHeader>
+
+        {selectedCampaign && (
+          <div className="space-y-6 p-6">
+            {/* Campaign Info */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div>
+                  <Label className="text-zinc-400">Campaign Name</Label>
+                  <p className="text-zinc-200 font-medium">{selectedCampaign.name}</p>
+                </div>
+                <div>
+                  <Label className="text-zinc-400">Status</Label>
+                  <div className="mt-1">{getStatusBadge(selectedCampaign.status)}</div>
+                </div>
+                <div>
+                  <Label className="text-zinc-400">Template</Label>
+                  <p className="text-zinc-200">{selectedCampaign.template.name}</p>
+                </div>
+                <div>
+                  <Label className="text-zinc-400">Instances</Label>
+                  <p className="text-zinc-200">{selectedCampaign.instances.length} instances</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <Label className="text-zinc-400">Total Messages</Label>
+                  <p className="text-zinc-200 font-medium">{selectedCampaign.totalMessages}</p>
+                </div>
+                <div>
+                  <Label className="text-zinc-400">Sent</Label>
+                  <p className="text-green-400 font-medium">{selectedCampaign.sentMessages}</p>
+                </div>
+                <div>
+                  <Label className="text-zinc-400">Failed</Label>
+                  <p className="text-red-400 font-medium">{selectedCampaign.failedMessages}</p>
+                </div>
+                <div>
+                  <Label className="text-zinc-400">Delay Range</Label>
+                  <p className="text-zinc-200">{selectedCampaign.delayRange.start}s - {selectedCampaign.delayRange.end}s</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Progress Bar */}
+            <div className="space-y-2">
+              <Label className="text-zinc-400">Progress</Label>
+              <div className="w-full bg-zinc-800 rounded-full h-2">
+                <div
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 h-2 rounded-full transition-all duration-300"
+                  style={{
+                    width: `${selectedCampaign.totalMessages > 0 ? (selectedCampaign.sentMessages / selectedCampaign.totalMessages) * 100 : 0}%`,
+                  }}
+                />
+              </div>
+              <p className="text-zinc-400 text-sm">
+                {selectedCampaign.sentMessages} of {selectedCampaign.totalMessages} messages sent
+              </p>
+            </div>
+
+            {/* Timestamps */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <Label className="text-zinc-400">Created At</Label>
+                <p className="text-zinc-200">{formatDate(selectedCampaign.createdAt)}</p>
+              </div>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
   // Fetch templates with pagination
   const fetchTemplates = useCallback(async () => {
     const token = await getToken();
@@ -353,6 +547,28 @@ export default function MessagingPage() {
     }
   }, [currentStep, fetchTemplates]);
 
+  // Handle instance selection for multi-select dropdown
+  const handleInstanceSelection = (instanceId: string) => {
+    setSelectedInstances(prev =>
+      prev.includes(instanceId)
+        ? prev.filter(id => id !== instanceId)
+        : [...prev, instanceId]
+    );
+  };
+
+  // Handle select all instances
+  const handleSelectAllInstances = () => {
+    const connectedInstanceIds = instances
+      .filter(instance => instance.whatsapp.status === 'connected')
+      .map(instance => instance._id);
+    setSelectedInstances(connectedInstanceIds);
+  };
+
+  // Handle deselect all instances
+  const handleDeselectAllInstances = () => {
+    setSelectedInstances([]);
+  };
+
   // Handle recipient input changes
   const handleRecipientChange = (index: number, field: keyof Recipient, value: string) => {
     const newRecipients = [...recipients];
@@ -377,27 +593,6 @@ export default function MessagingPage() {
     setRecipients(recipients.filter((_, i) => i !== index));
   };
 
-  // Handle instance selection
-  const handleInstanceToggle = (instanceId: string) => {
-    setSelectedInstances((prev) =>
-      prev.includes(instanceId)
-        ? prev.filter((id) => id !== instanceId)
-        : [...prev, instanceId]
-    );
-  };
-
-  // Select all connected instances
-  const handleSelectAllInstances = () => {
-    const connectedInstances = instances.filter(instance => instance.whatsapp.status === 'connected');
-    const allConnectedIds = connectedInstances.map(instance => instance._id);
-    
-    if (selectedInstances.length === allConnectedIds.length) {
-      setSelectedInstances([]);
-    } else {
-      setSelectedInstances(allConnectedIds);
-    }
-  };
-
   // Handle Excel file upload
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -411,11 +606,19 @@ export default function MessagingPage() {
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
-        const data = e.target?.result as ArrayBuffer;
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false }) as string[][];
+        const data = e.target?.result as ArrayBuffer | string;
+        let jsonData: string[][];
+        
+        if (file.name.endsWith('.csv')) {
+          const text = data as string;
+          const rows = text.split('\n').map(row => row.split(',').map(cell => cell.trim()));
+          jsonData = rows.filter(row => row.some(cell => cell));
+        } else {
+          const workbook = XLSX.read(data, { type: file.name.endsWith('.csv') ? 'string' : 'array' });
+          const firstSheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[firstSheetName];
+          jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false }) as string[][];
+        }
 
         if (jsonData.length === 0) {
           toast.error('The uploaded file is empty');
@@ -425,7 +628,7 @@ export default function MessagingPage() {
         const headers = jsonData[0].map((header, idx) => header || `Column ${idx + 1}`);
         setExcelHeaders(headers);
 
-        const rows = jsonData.map((row) =>
+        const rows = jsonData.slice(1).map((row) =>
           row.reduce((obj, value, idx) => {
             obj[headers[idx]] = value?.toString() || '';
             return obj;
@@ -434,6 +637,7 @@ export default function MessagingPage() {
 
         setExcelData(rows);
         setIsExcelDataLoaded(true);
+        setShowColumnMapping(true);
       } catch (err) {
         toast.error('Error parsing file: The file may be corrupted or in an unsupported format.');
         console.error(err);
@@ -449,6 +653,55 @@ export default function MessagingPage() {
     } else {
       reader.readAsArrayBuffer(file);
     }
+  };
+
+  // Handle column mapping
+  const handleColumnMappingChange = (field: string, header: string) => {
+    setColumnMappings(prev => ({ ...prev, [field]: header === 'none' ? '' : header }));
+  };
+
+  // Import recipients from Excel
+  const handleImportRecipients = () => {
+    if (!columnMappings.name || !columnMappings.phone) {
+      toast.error('Please map both Name and Phone columns');
+      return;
+    }
+
+    const newRecipients = excelData.map(row => {
+      const variables: { [key: string]: string } = {};
+      for (let i = 1; i <= 10; i++) {
+        const varKey = `var${i}`;
+        const header = columnMappings[varKey];
+        variables[varKey] = header && row[header] ? row[header] : '';
+      }
+      return {
+        phone: row[columnMappings.phone] || '',
+        name: row[columnMappings.name] || '',
+        variables
+      };
+    }).filter(r => r.phone && r.name);
+
+    setRecipients([...recipients, ...newRecipients]);
+    setImportModalOpen(false);
+    setExcelData([]);
+    setExcelHeaders([]);
+    setIsExcelDataLoaded(false);
+    setShowColumnMapping(false);
+    setColumnMappings({
+      name: '',
+      phone: '',
+      var1: '',
+      var2: '',
+      var3: '',
+      var4: '',
+      var5: '',
+      var6: '',
+      var7: '',
+      var8: '',
+      var9: '',
+      var10: ''
+    });
+    toast.success('Recipients imported successfully');
   };
 
   // Navigation functions
@@ -495,15 +748,14 @@ export default function MessagingPage() {
 
     setIsCreatingCampaign(true);
     try {
-      // Mock campaign creation - replace with actual API call
       const selectedTemplateObj = templates.find(t => t._id === selectedTemplate);
-      const selectedInstancesObj = instances.filter(i => selectedInstances.includes(i._id));
+      const selectedInstanceObjs = instances.filter(i => selectedInstances.includes(i._id));
       
       const newCampaign: Campaign = {
         _id: Date.now().toString(),
         name: campaignName,
         template: selectedTemplateObj!,
-        instances: selectedInstancesObj,
+        instances: selectedInstanceObjs,
         recipients,
         status: 'draft',
         totalMessages: recipients.length * selectedInstances.length,
@@ -537,11 +789,48 @@ export default function MessagingPage() {
 
   // Send campaign
   const handleSendCampaign = async () => {
+    const token = await getToken();
+    if (!token) {
+      router.push('/login');
+      return;
+    }
+
     setIsSending(true);
     try {
-      // Mock sending logic
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
+      const payload = {
+        templateId: selectedTemplate,
+        instanceIds: selectedInstances,
+        recipients: recipients.map(({ phone, name, variables }) => ({
+          phone,
+          name,
+          variables: Object.fromEntries(
+            Object.entries(variables).filter(([_, value]) => value.trim() !== '')
+          )
+        })),
+        delayRange
+      };
+
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      const result = await response.json();
+      if (!result.status) {
+        throw new Error(result.message || 'Failed to send campaign');
+      }
+
+      setSendResponses(result.responses || []);
+      setResponseDialogOpen(true);
       toast.success('Campaign sent successfully!');
       setShowCreateCampaign(false);
       
@@ -621,60 +910,80 @@ export default function MessagingPage() {
 
             {/* Instance Selection */}
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <Label className="text-zinc-400 font-medium">Select Instances *</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleSelectAllInstances}
-                  className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-                >
-                  {selectedInstances.length === instances.filter(i => i.whatsapp.status === 'connected').length ? 'Deselect All' : 'Select All Connected'}
-                </Button>
-              </div>
-              
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto">
-                {instances.map((instance) => (
-                  <div
-                    key={instance._id}
-                    className={`p-4 rounded-lg border cursor-pointer transition-colors ${
-                      selectedInstances.includes(instance._id)
-                        ? 'bg-blue-500/10 border-blue-500/20'
-                        : 'bg-zinc-800 border-zinc-700 hover:border-zinc-600'
-                    } ${instance.whatsapp.status !== 'connected' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    onClick={() => instance.whatsapp.status === 'connected' && handleInstanceToggle(instance._id)}
+              <Label className="text-zinc-400 font-medium">Select Instances *</Label>
+              <Select
+                value={selectedInstances}
+                onValueChange={(value) => {
+                  if (value === 'select-all') {
+                    handleSelectAllInstances();
+                  } else if (value === 'deselect-all') {
+                    handleDeselectAllInstances();
+                  } else {
+                    handleInstanceSelection(value);
+                  }
+                }}
+              >
+                <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                  <SelectValue
+                    placeholder="Select instances"
+                    className="text-zinc-400"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
-                        <Checkbox
-                          checked={selectedInstances.includes(instance._id)}
-                          disabled={instance.whatsapp.status !== 'connected'}
-                          className="data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
-                        />
-                        <div>
-                          <p className="text-zinc-200 font-medium">
-                            {instance.name || `Device ${instance._id.slice(-4)}`}
-                          </p>
-                          <p className="text-sm text-zinc-400">
-                            {instance.whatsapp.phone || 'No phone number'}
-                          </p>
+                    {selectedInstances.length > 0
+                      ? `${selectedInstances.length} instance${selectedInstances.length > 1 ? 's' : ''} selected`
+                      : 'Select instances'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200 max-h-60 overflow-y-auto">
+                  <SelectItem value="select-all" className="font-semibold">
+                    Select All
+                  </SelectItem>
+                  <SelectItem value="deselect-all" className="font-semibold">
+                    Deselect All
+                  </SelectItem>
+                  {instances
+                    .filter(instance => instance.whatsapp.status === 'connected')
+                    .map(instance => (
+                      <SelectItem key={instance._id} value={instance._id}>
+                        <div className="flex items-center justify-between">
+                          <span>{instance.name || `Device ${instance._id.slice(-4)}`}</span>
+                          <Badge className="bg-green-500 text-white ml-2">
+                            Connected
+                          </Badge>
                         </div>
-                      </div>
-                      <div
-                        className={`w-3 h-3 rounded-full ${
-                          instance.whatsapp.status === 'connected' ? 'bg-emerald-500' : 'bg-red-500'
-                        }`}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
+                      </SelectItem>
+                    ))}
+                </SelectContent>
+              </Select>
               
               {instances.filter(i => i.whatsapp.status === 'connected').length === 0 && (
                 <div className="text-center py-8">
                   <AlertCircle className="h-12 w-12 text-amber-500 mx-auto mb-4" />
                   <p className="text-zinc-400">No connected instances available. Please connect at least one instance first.</p>
+                </div>
+              )}
+              
+              {/* Display selected instances */}
+              {selectedInstances.length > 0 && (
+                <div className="mt-4">
+                  <p className="text-zinc-400 text-sm mb-2">Selected Instances:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {selectedInstances.map(instanceId => {
+                      const instance = instances.find(i => i._id === instanceId);
+                      return (
+                        <Badge key={instanceId} variant="outline" className="text-zinc-200">
+                          {instance?.name || `Device ${instanceId.slice(-4)}`}
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="ml-2 h-4 w-4 p-0"
+                            onClick={() => handleInstanceSelection(instanceId)}
+                          >
+                            <X className="h-3 w-3 text-red-400" />
+                          </Button>
+                        </Badge>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
@@ -822,14 +1131,22 @@ export default function MessagingPage() {
                 className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
               >
                 <Users className="h-4 w-4 mr-2" />
-                Manual Import
+                Remove Duplicates
               </Button>
               <Button
                 variant="outline"
                 className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
               >
                 <Plus className="h-4 w-4 mr-2" />
-                Add Contact
+                Delete all
+              </Button>
+              <Button
+                variant="outline"
+                onClick={addRecipient}
+                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                Add Reciptants
               </Button>
             </div>
 
@@ -841,8 +1158,9 @@ export default function MessagingPage() {
                     <TableHead className="text-zinc-400">SN</TableHead>
                     <TableHead className="text-zinc-400">Name</TableHead>
                     <TableHead className="text-zinc-400">Phone</TableHead>
-                    <TableHead className="text-zinc-400">Email</TableHead>
-                    <TableHead className="text-zinc-400">Groups</TableHead>
+                    {Array.from({ length: 10 }, (_, i) => (
+                      <TableHead key={i} className="text-zinc-400">Var{i + 1}</TableHead>
+                    ))}
                     <TableHead className="text-zinc-400">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -866,43 +1184,31 @@ export default function MessagingPage() {
                           className="bg-zinc-800 border-zinc-700 text-zinc-200"
                         />
                       </TableCell>
-                      <TableCell className="text-zinc-400">-</TableCell>
-                      <TableCell className="text-zinc-400">-</TableCell>
+                      {Array.from({ length: 10 }, (_, i) => (
+                        <TableCell key={i}>
+                          <Input
+                            value={recipient.variables[`var${i + 1}`]}
+                            onChange={(e) => handleVariableChange(index, `var${i + 1}`, e.target.value)}
+                            placeholder={`Var${i + 1}`}
+                            className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                          />
+                        </TableCell>
+                      ))}
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="text-zinc-400 hover:text-zinc-200"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => removeRecipient(index)}
-                            className="text-red-400 hover:text-red-300"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => removeRecipient(index)}
+                          className="text-red-400 hover:text-red-300"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
             </div>
-
-            {/* Add Recipient Button */}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={addRecipient}
-              className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              Add Recipient
-            </Button>
 
             {/* Summary */}
             <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4">
@@ -939,7 +1245,9 @@ export default function MessagingPage() {
                 </div>
                 <div>
                   <Label className="text-zinc-400">Selected Instances</Label>
-                  <p className="text-zinc-200 font-medium">{selectedInstances.length} instances</p>
+                  <p className="text-zinc-200 font-medium">
+                    {selectedInstances.length} instances
+                  </p>
                 </div>
                 <div>
                   <Label className="text-zinc-400">Total Recipients</Label>
@@ -1200,7 +1508,7 @@ export default function MessagingPage() {
             <div className="flex flex-col items-center justify-center h-64">
               <MessageSquare className="h-16 w-16 text-zinc-600 mb-4" />
               <h3 className="text-xl font-semibold text-zinc-300 mb-2">No Campaigns Found</h3>
-              <p className="text-zinc-500 mb-6">Create your first campaign to get started.</p>
+              <p className="text-zinc-400 mb-6">Create your first campaign to get started.</p>
               <Button
                 onClick={() => setShowCreateCampaign(true)}
                 className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
@@ -1210,88 +1518,7 @@ export default function MessagingPage() {
               </Button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-zinc-800">
-                    <TableHead className="text-zinc-400">Campaign</TableHead>
-                    <TableHead className="text-zinc-400">Template</TableHead>
-                    <TableHead className="text-zinc-400">Instances</TableHead>
-                    <TableHead className="text-zinc-400">Status</TableHead>
-                    <TableHead className="text-zinc-400">Messages</TableHead>
-                    <TableHead className="text-zinc-400">Delivered</TableHead>
-                    <TableHead className="text-zinc-400">Failed</TableHead>
-                    <TableHead className="text-zinc-400">Created</TableHead>
-                    <TableHead className="text-zinc-400">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {currentCampaigns.map((campaign) => (
-                    <TableRow key={campaign._id} className="border-zinc-800">
-                      <TableCell>
-                        <div>
-                          <p className="text-zinc-200 font-medium">{campaign.name}</p>
-                          <p className="text-zinc-400 text-sm">ID: {campaign._id}</p>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div>
-                          <p className="text-zinc-200">{campaign.template.name}</p>
-                          <p className="text-zinc-400 text-sm">{campaign.template.messageType}</p>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-zinc-200">{campaign.instances.length}</TableCell>
-                      <TableCell>{getStatusBadge(campaign.status)}</TableCell>
-                      <TableCell className="text-zinc-200">{campaign.totalMessages}</TableCell>
-                      <TableCell className="text-zinc-200">{campaign.deliveredMessages}</TableCell>
-                      <TableCell className="text-zinc-200">{campaign.failedMessages}</TableCell>
-                      <TableCell className="text-zinc-400">{formatDate(campaign.createdAt)}</TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => {
-                                    setSelectedCampaign(campaign);
-                                    setShowCampaignDetails(true);
-                                  }}
-                                  className="text-zinc-400 hover:text-zinc-200"
-                                >
-                                  <Eye className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>View Details</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                          
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="text-zinc-400 hover:text-zinc-200"
-                                >
-                                  <MoreHorizontal className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>
-                                <p>More Actions</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            renderCampaignsTable()
           )}
         </CardContent>
         
@@ -1495,16 +1722,28 @@ export default function MessagingPage() {
           setExcelData([]);
           setExcelHeaders([]);
           setIsExcelDataLoaded(false);
-          setSelectedHeaderRow(0);
           setShowColumnMapping(false);
-          setColumnMappings({});
+          setColumnMappings({
+            name: '',
+            phone: '',
+            var1: '',
+            var2: '',
+            var3: '',
+            var4: '',
+            var5: '',
+            var6: '',
+            var7: '',
+            var8: '',
+            var9: '',
+            var10: ''
+          });
         }
       }}>
         <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-xl font-semibold">Import Recipients</DialogTitle>
             <DialogDescription className="text-zinc-400">
-              Upload Excel or CSV file to import recipients
+              Upload Excel or CSV file and map columns to import recipients
             </DialogDescription>
           </DialogHeader>
           
@@ -1529,7 +1768,7 @@ export default function MessagingPage() {
                   onChange={handleFileUpload}
                 />
               </div>
-            ) : (
+            ) : !showColumnMapping ? (
               <div className="space-y-4">
                 <Label className="text-zinc-400 font-medium">Preview Data</Label>
                 <div className="overflow-x-auto max-h-64">
@@ -1544,7 +1783,7 @@ export default function MessagingPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {excelData.slice(1, 6).map((row, rowIdx) => (
+                      {excelData.slice(0, 5).map((row, rowIdx) => (
                         <TableRow key={rowIdx} className="border-zinc-800">
                           {excelHeaders.map((header, colIdx) => (
                             <TableCell key={colIdx} className="text-zinc-200">
@@ -1573,28 +1812,114 @@ export default function MessagingPage() {
                   </Button>
                   <Button
                     type="button"
-                    onClick={() => {
-                      // Import logic here
-                      const newRecipients = excelData.slice(1).map((row) => ({
-                        phone: row[excelHeaders[1]] || '',
-                        name: row[excelHeaders[0]] || '',
-                        variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' }
-                      })).filter(r => r.phone && r.name);
-                      
-                      setRecipients([...recipients, ...newRecipients]);
-                      setImportModalOpen(false);
-                      setExcelData([]);
-                      setExcelHeaders([]);
-                      setIsExcelDataLoaded(false);
-                      toast.success('Recipients imported successfully');
-                    }}
+                    onClick={() => setShowColumnMapping(true)}
                     className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    Map Columns
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <Label className="text-zinc-400 font-medium">Map Columns</Label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {['name', 'phone', ...Array.from({ length: 10 }, (_, i) => `var${i + 1}`)].map(field => (
+                    <div key={field} className="space-y-2">
+                      <Label className="text-zinc-400">{field === 'name' ? 'Name *' : field === 'phone' ? 'Phone *' : `Variable ${field.slice(3)}`}</Label>
+                      <Select
+                        value={columnMappings[field]}
+                        onValueChange={(value) => handleColumnMappingChange(field, value)}
+                      >
+                        <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                          <SelectValue placeholder={`Select column for ${field}`} />
+                        </SelectTrigger>
+                        <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                          <SelectItem value="none">None</SelectItem>
+                          {excelHeaders.map(header => (
+                            <SelectItem key={header} value={header}>{header}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ))}
+                </div>
+                
+                <div className="flex justify-end space-x-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowColumnMapping(false)}
+                    className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    type="button"
+                    onClick={handleImportRecipients}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                    disabled={!columnMappings.name || !columnMappings.phone}
                   >
                     Import
                   </Button>
                 </div>
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Send Responses Dialog */}
+      <Dialog open={responseDialogOpen} onOpenChange={setResponseDialogOpen}>
+        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl font-semibold">Send Responses</DialogTitle>
+            <DialogDescription className="text-zinc-400">
+              Review the status of messages sent in the campaign
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="p-6 space-y-6">
+            {sendResponses.length === 0 ? (
+              <div className="text-center py-8">
+                <MessageSquare className="h-12 w-12 text-zinc-500 mx-auto mb-4" />
+                <p className="text-zinc-400">No responses available</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-zinc-800">
+                      <TableHead className="text-zinc-400">Phone</TableHead>
+                      <TableHead className="text-zinc-400">Status</TableHead>
+                      <TableHead className="text-zinc-400">Message</TableHead>
+                      <TableHead className="text-zinc-400">Instance ID</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sendResponses.map((response, index) => (
+                      <TableRow key={index} className="border-zinc-800">
+                        <TableCell className="text-zinc-200">{response.phone}</TableCell>
+                        <TableCell>
+                          <Badge className={response.status ? 'bg-green-500' : 'bg-red-500'}>
+                            {response.status ? 'Success' : 'Failed'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-zinc-200">{response.message}</TableCell>
+                        <TableCell className="text-zinc-200">{response.instanceId}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            <div className="flex justify-end">
+              <Button
+                onClick={() => setResponseDialogOpen(false)}
+                className="bg-zinc-800 hover:bg-zinc-700 text-white"
+              >
+                Close
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
