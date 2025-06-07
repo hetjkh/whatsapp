@@ -234,7 +234,7 @@ export default function MessagingPage() {
       router.push('/login');
       return;
     }
-
+  
     setIsLoading(true);
     try {
       // Fetch instances
@@ -246,18 +246,18 @@ export default function MessagingPage() {
         },
         body: JSON.stringify({}),
       });
-
+  
       if (instanceResponse.status === 401) {
         handleUnauthorized();
         return;
       }
-
+  
       const instanceData = await instanceResponse.json();
-      if (instanceData.status) {
-        setInstances(instanceData.instances || []);
-      }
+      const fetchedInstances = instanceData.status ? instanceData.instances || [] : [];
+      setInstances(fetchedInstances); // Update state with fetched instances
 
-      // Fetch campaigns from the new API
+      
+      // Fetch campaigns
       const campaignResponse = await fetch('https://whatsapp.recuperafly.com/api/template/message/all', {
         method: 'POST',
         headers: {
@@ -266,30 +266,29 @@ export default function MessagingPage() {
         },
         body: JSON.stringify({}),
       });
-
+  
       if (campaignResponse.status === 401) {
         handleUnauthorized();
         return;
       }
-
+  
       const campaignData = await campaignResponse.json();
       if (campaignData.status) {
         const mappedCampaigns: Campaign[] = campaignData.messages.map((msg: any) => ({
           _id: msg._id,
           name: msg.name,
-          // Since template details aren't fully provided in the API, use a placeholder
           template: {
             _id: msg.templateId,
-            name: `Template ${msg.templateId.slice(-4)}`, // Placeholder, as template name isn't in API
-            messageType: 'Text', // Placeholder, adjust based on actual template data if available
+            name: `Template ${msg.templateId.slice(-4)}`,
+            messageType: 'Text',
           },
           instances: (msg.instanceIds || [])
-            .map((id: string) => instances.find((inst: Instance) => inst._id === id))
+            .map((id: string) => fetchedInstances.find((inst: Instance) => inst._id === id))
             .filter((inst: Instance | undefined) => inst !== undefined),
           recipients: msg.recipients.map((rec: any) => ({
             phone: rec.phone,
             name: rec.name,
-            variables: {}, // No variables in API response, initialize empty
+            variables: {},
           })),
           status: msg.status,
           totalMessages: msg.statistics.total,
@@ -298,9 +297,9 @@ export default function MessagingPage() {
           createdAt: msg.createdAt,
           delayRange: msg.settings.delayRange,
         }));
-
+  
         setCampaigns(mappedCampaigns);
-
+  
         // Calculate stats
         const stats = mappedCampaigns.reduce(
           (acc, campaign) => {
@@ -318,7 +317,7 @@ export default function MessagingPage() {
             paused: 0,
           }
         );
-
+  
         setCampaignStats(stats);
       } else {
         toast.error(campaignData.message || 'Failed to fetch campaigns');
@@ -328,7 +327,41 @@ export default function MessagingPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [router, instances]);
+  }, [router]); // Remove `instances` from dependencies
+  
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleRemoveDuplicates = () => {
+    const seenPhones = new Set<string>();
+    const uniqueRecipients = recipients.filter((recipient) => {
+      if (!recipient.phone) return false; // Skip recipients with empty phone numbers
+      if (seenPhones.has(recipient.phone)) return false;
+      seenPhones.add(recipient.phone);
+      return true;
+    });
+  
+    if (uniqueRecipients.length === recipients.length) {
+      toast.info('No duplicate phone numbers found.');
+    } else {
+      setRecipients(uniqueRecipients.length > 0 ? uniqueRecipients : [{
+        phone: '',
+        name: '',
+        variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' }
+      }]);
+      toast.success(`Removed ${recipients.length - uniqueRecipients.length} duplicate recipients.`);
+    }
+  };
+  
+  const handleDeleteAll = () => {
+    setRecipients([{
+      phone: '',
+      name: '',
+      variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' }
+    }]);
+    toast.success('All recipients deleted.');
+  };
 
   const renderCampaignsTable = () => (
     <div className="overflow-x-auto">
@@ -1108,118 +1141,120 @@ export default function MessagingPage() {
           </div>
         );
 
-      case 3:
-        return (
-          <div className="space-y-6">
-            <div>
-              <h3 className="text-lg font-semibold text-zinc-200 mb-2">Select Audience</h3>
-              <p className="text-zinc-400 mb-6">Import recipients from Excel or add manually.</p>
-            </div>
-
-            {/* Import Options */}
-            <div className="flex flex-wrap gap-3">
-              <Button
-                variant="outline"
-                onClick={() => setImportModalOpen(true)}
-                className="bg-blue-600 hover:bg-blue-700 text-white border-none"
-              >
-                <Upload className="h-4 w-4 mr-2" />
-                Excel Import
-              </Button>
-              <Button
-                variant="outline"
-                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-              >
-                <Users className="h-4 w-4 mr-2" />
-                Remove Duplicates
-              </Button>
-              <Button
-                variant="outline"
-                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Delete all
-              </Button>
-              <Button
-                variant="outline"
-                onClick={addRecipient}
-                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                Add Reciptants
-              </Button>
-            </div>
-
-            {/* Recipients Table */}
-            <div className="border border-zinc-800 rounded-lg overflow-hidden">
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-zinc-800">
-                    <TableHead className="text-zinc-400">SN</TableHead>
-                    <TableHead className="text-zinc-400">Name</TableHead>
-                    <TableHead className="text-zinc-400">Phone</TableHead>
-                    {Array.from({ length: 10 }, (_, i) => (
-                      <TableHead key={i} className="text-zinc-400">Var{i + 1}</TableHead>
-                    ))}
-                    <TableHead className="text-zinc-400">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {recipients.map((recipient, index) => (
-                    <TableRow key={index} className="border-zinc-800">
-                      <TableCell className="text-zinc-200">{index + 1}</TableCell>
-                      <TableCell>
-                        <Input
-                          value={recipient.name}
-                          onChange={(e) => handleRecipientChange(index, 'name', e.target.value)}
-                          placeholder="Enter name"
-                          className="bg-zinc-800 border-zinc-700 text-zinc-200"
-                        />
-                      </TableCell>
-                      <TableCell>
-                        <Input
-                          value={recipient.phone}
-                          onChange={(e) => handleRecipientChange(index, 'phone', e.target.value)}
-                          placeholder="Enter phone"
-                          className="bg-zinc-800 border-zinc-700 text-zinc-200"
-                        />
-                      </TableCell>
+        case 3:
+          return (
+            <div className="space-y-6">
+              <div>
+                <h3 className="text-lg font-semibold text-zinc-200 mb-2">Select Audience</h3>
+                <p className="text-zinc-400 mb-6">Import recipients from Excel or add manually.</p>
+              </div>
+    
+              {/* Import Options */}
+              <div className="flex flex-wrap gap-3">
+                <Button
+                  variant="outline"
+                  onClick={() => setImportModalOpen(true)}
+                  className="bg-blue-600 hover:bg-blue-700 text-white border-none"
+                >
+                  <Upload className="h-4 w-4 mr-2" />
+                  Excel Import
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleRemoveDuplicates}
+                  className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                >
+                  <Users className="h-4 w-4 mr-2" />
+                  Remove Duplicates
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handleDeleteAll}
+                  className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete All
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={addRecipient}
+                  className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                >
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Recipient
+                </Button>
+              </div>
+    
+              {/* Recipients Table */}
+              <div className="border border-zinc-800 rounded-lg overflow-hidden">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-zinc-800">
+                      <TableHead className="text-zinc-400">SN</TableHead>
+                      <TableHead className="text-zinc-400">Name</TableHead>
+                      <TableHead className="text-zinc-400">Phone</TableHead>
                       {Array.from({ length: 10 }, (_, i) => (
-                        <TableCell key={i}>
+                        <TableHead key={i} className="text-zinc-400">Var{i + 1}</TableHead>
+                      ))}
+                      <TableHead className="text-zinc-400">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {recipients.map((recipient, index) => (
+                      <TableRow key={index} className="border-zinc-800">
+                        <TableCell className="text-zinc-200">{index + 1}</TableCell>
+                        <TableCell>
                           <Input
-                            value={recipient.variables[`var${i + 1}`]}
-                            onChange={(e) => handleVariableChange(index, `var${i + 1}`, e.target.value)}
-                            placeholder={`Var${i + 1}`}
+                            value={recipient.name}
+                            onChange={(e) => handleRecipientChange(index, 'name', e.target.value)}
+                            placeholder="Enter name"
                             className="bg-zinc-800 border-zinc-700 text-zinc-200"
                           />
                         </TableCell>
-                      ))}
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => removeRecipient(index)}
-                          className="text-red-400 hover:text-red-300"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-
-            {/* Summary */}
-            <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-zinc-400">Total: {recipients.length}</span>
-                <span className="text-zinc-400">Valid: {recipients.filter(r => r.phone && r.name).length}</span>
-                <span className="text-zinc-400">Invalid: {recipients.filter(r => !r.phone || !r.name).length}</span>
+                        <TableCell>
+                          <Input
+                            value={recipient.phone}
+                            onChange={(e) => handleRecipientChange(index, 'phone', e.target.value)}
+                            placeholder="Enter phone"
+                            className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                          />
+                        </TableCell>
+                        {Array.from({ length: 10 }, (_, i) => (
+                          <TableCell key={i}>
+                            <Input
+                              value={recipient.variables[`var${i + 1}`]}
+                              onChange={(e) => handleVariableChange(index, `var${i + 1}`, e.target.value)}
+                              placeholder={`Var${i + 1}`}
+                              className="bg-zinc-800 border-zinc-700 text-zinc-200"
+                            />
+                          </TableCell>
+                        ))}
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => removeRecipient(index)}
+                            className="text-red-400 hover:text-red-300"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+    
+              {/* Summary */}
+              <div className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-zinc-400">Total: {recipients.length}</span>
+                  <span className="text-zinc-400">Valid: {recipients.filter(r => r.phone && r.name).length}</span>
+                  <span className="text-zinc-400">Invalid: {recipients.filter(r => !r.phone || !r.name).length}</span>
+                </div>
               </div>
             </div>
-          </div>
-        );
+          );
 
       case 4:
         return (
@@ -1919,7 +1954,7 @@ export default function MessagingPage() {
               >
                 Close
               </Button>
-            </div>
+            </div>  
           </div>
         </DialogContent>
       </Dialog>
