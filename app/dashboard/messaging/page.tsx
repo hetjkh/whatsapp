@@ -11,6 +11,8 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
+import { motion, AnimatePresence } from 'framer-motion';
+
 
 import { 
   Plus, 
@@ -172,7 +174,9 @@ export default function MessagingPage() {
   const [showCampaignDetails, setShowCampaignDetails] = useState(false);
   const [isDeleting, setIsDeleting] = useState<{ [key: string]: boolean }>({});
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
-  
+  const [sendingProgressDialogOpen, setSendingProgressDialogOpen] = useState(false);
+const [currentSendingIndex, setCurrentSendingIndex] = useState(-1); // Tracks current message being sent
+const [sendProgress, setSendProgress] = useState<SendResponse[]>([]); // Tracks progress of sent messages
   // Campaign Creation Wizard State
   const [currentStep, setCurrentStep] = useState(1);
   const [templateSearchValue, setTemplateSearchValue] = useState('');
@@ -906,6 +910,7 @@ export default function MessagingPage() {
 
   // Send campaign
 // Send campaign
+
 const handleSendCampaign = async () => {
   const token = await getToken();
   if (!token) {
@@ -914,43 +919,85 @@ const handleSendCampaign = async () => {
   }
 
   setIsSending(true);
+  setSendingProgressDialogOpen(true); // Open progress dialog
+  setCurrentSendingIndex(0); // Start with the first recipient
+  setSendProgress([]); // Reset progress
+
   try {
-    const payload = {
-      name: campaignName, // Include campaign name as per new API structure
-      templateId: selectedTemplate,
-      instanceIds: selectedInstances,
-      recipients: recipients.map(({ phone, name, variables }) => ({
-        phone,
-        name,
-        variables: Object.fromEntries(
-          Object.entries(variables).filter(([_, value]) => value.trim() !== '')
-        ),
-      })),
-      delayRange,
-    };
+    for (let i = 0; i < recipients.length; i++) {
+      const recipient = recipients[i];
+      setCurrentSendingIndex(i); // Update current sending index
 
-    const response = await fetch('https://whatsapp.recuperafly.com/api/template/send', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(payload),
-    });
+      // Prepare payload for a single recipient
+      const payload = {
+        name: campaignName,
+        templateId: selectedTemplate,
+        instanceIds: selectedInstances,
+        recipients: [{
+          phone: recipient.phone,
+          name: recipient.name,
+          variables: Object.fromEntries(
+            Object.entries(recipient.variables).filter(([_, value]) => value.trim() !== '')
+          ),
+        }],
+        delayRange,
+      };
 
-    if (response.status === 401) {
-      handleUnauthorized();
-      return;
+      const response = await fetch('https://whatsapp.recuperafly.com/api/template/send', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        setIsSending(false);
+        setSendingProgressDialogOpen(false);
+        return;
+      }
+
+      const result = await response.json();
+      console.log(`API Response for recipient ${recipient.phone}:`, result); // Debug log
+
+      if (!result.status) {
+        throw new Error(result.message || `Failed to send message to ${recipient.phone}`);
+      }
+
+      // Handle API response
+      let responses: SendResponse[] = [];
+      if (result.responses && Array.isArray(result.responses)) {
+        responses = result.responses;
+      } else if (result.response && typeof result.response === 'object') {
+        // Handle single response object
+        responses = [result.response];
+      } else if (result.data && Array.isArray(result.data)) {
+        // Handle alternative response structure
+        responses = result.data;
+      } else {
+        console.warn(`Unexpected response format for recipient ${recipient.phone}:`, result);
+        responses = [{
+          phone: recipient.phone,
+          status: false,
+          message: 'Invalid response format from server',
+          instanceId: selectedInstances[0] || 'unknown',
+        }];
+      }
+
+      // Update send progress
+      setSendProgress(prev => [...prev, ...responses]);
+
+      // Simulate delay for animation (adjust based on delayRange)
+      await new Promise(resolve => setTimeout(resolve, Math.random() * (delayRange.end - delayRange.start) + delayRange.start * 1000));
     }
 
-    const result = await response.json();
-    if (!result.status) {
-      throw new Error(result.message || 'Failed to send campaign');
-    }
-
-    setSendResponses(result.responses || []);
-    setResponseDialogOpen(true);
+    // All messages sent, show success animation
     showToast('Campaign sent successfully!', 'success');
+    setSendResponses(sendProgress); // Update sendResponses with sendProgress
+    setResponseDialogOpen(true); // Show final responses
+    setSendingProgressDialogOpen(false); // Close progress dialog
     setShowCreateCampaign(false);
 
     // Reset form
@@ -963,18 +1010,14 @@ const handleSendCampaign = async () => {
 
   } catch (err) {
     showToast('Error sending campaign: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
+    console.error('Send campaign error:', err);
+    setSendingProgressDialogOpen(false);
   } finally {
     setIsSending(false);
+    setCurrentSendingIndex(-1);
   }
 };
 
-  // // Filter campaigns
-  // const filteredCampaigns = campaigns.filter(campaign => {
-  //   const matchesSearch = campaign.name.toLowerCase().includes(searchValue.toLowerCase()) ||
-  //                        campaign.template.name.toLowerCase().includes(searchValue.toLowerCase());
-  //   const matchesStatus = statusFilter === 'all' || campaign.status === statusFilter;
-  //   return matchesSearch && matchesStatus;
-  // });
 
   // Paginate campaigns
   const totalPages = Math.ceil(totalCampaigns / campaignsPerPage);
@@ -1014,6 +1057,93 @@ const handleSendCampaign = async () => {
       </Badge>
     );
   };
+  const renderSendingProgressDialog = () => (
+    <Dialog open={sendingProgressDialogOpen} onOpenChange={setSendingProgressDialogOpen}>
+      <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="text-xl font-semibold">Sending Messages</DialogTitle>
+          <DialogDescription className="text-zinc-400">
+            Sending campaign messages to recipients
+          </DialogDescription>
+        </DialogHeader>
+        
+        <div className="p-6 space-y-6">
+          {/* Progress Bar */}
+          <div className="w-full bg-zinc-800 rounded-full h-2">
+            <motion.div
+              className="bg-gradient-to-r from-blue-600 to-indigo-600 h-2 rounded-full"
+              initial={{ width: '0%' }}
+              animate={{ width: `${(sendProgress.length / recipients.length) * 100}%` }}
+              transition={{ duration: 0.5, ease: 'easeInOut' }}
+            />
+          </div>
+          <p className="text-zinc-400 text-sm">
+            {sendProgress.length} of {recipients.length} messages sent
+          </p>
+  
+          {/* Current Message Animation */}
+          <AnimatePresence mode="wait">
+            {currentSendingIndex >= 0 && currentSendingIndex < recipients.length && (
+              <motion.div
+                key={currentSendingIndex}
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -20 }}
+                transition={{ duration: 0.3 }}
+                className="flex items-center justify-between p-4 bg-zinc-800 rounded-lg"
+              >
+                <div>
+                  <p className="text-zinc-200 font-medium">Sending to: {recipients[currentSendingIndex].phone}</p>
+                  <p className="text-zinc-400 text-sm">Recipient {currentSendingIndex + 1} of {recipients.length}</p>
+                </div>
+                <Loader2 className="h-6 w-6 text-blue-500 animate-spin" />
+              </motion.div>
+            )}
+          </AnimatePresence>
+  
+          {/* Previously Sent Messages */}
+          {sendProgress.length > 0 && (
+            <div className="space-y-2 max-h-40 overflow-y-auto">
+              {sendProgress.map((response, index) => (
+                <motion.div
+                  key={index}
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  transition={{ duration: 0.3, delay: index * 0.1 }}
+                  className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg"
+                >
+                  <div>
+                    <p className="text-zinc-200">{response.phone}</p>
+                    <p className="text-zinc-400 text-sm">{response.message}</p>
+                  </div>
+                  {response.status ? (
+                    <CheckCircle className="h-5 w-5 text-green-500" />
+                  ) : (
+                    <AlertCircle className="h-5 w-5 text-red-500" />
+                  )}
+                </motion.div>
+              ))}
+            </div>
+          )}
+  
+          {/* Final Success Animation */}
+          {sendProgress.length === recipients.length && recipients.length > 0 && (
+            <motion.div
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ duration: 0.5, ease: 'backOut' }}
+              className="flex flex-col items-center justify-center py-6"
+            >
+              <CheckCircle className="h-16 w-16 text-green-500 mb-4" />
+              <p className="text-xl font-semibold text-zinc-200">All Messages Sent!</p>
+              <p className="text-zinc-400">Campaign completed successfully</p>
+            </motion.div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+
 
   const renderStepContent = () => {
     switch (currentStep) {
@@ -1448,7 +1578,7 @@ const handleSendCampaign = async () => {
         return null;
     }
   };
-
+  
   return (
     <div className="min-h-screen bg-zinc-950 p-4 sm:p-6">
       {/* Toast Container */}
@@ -1473,7 +1603,7 @@ const handleSendCampaign = async () => {
           </div>
         ))}
       </div>
-
+  
       <div className="max-w-7xl mx-auto space-y-6 sm:space-y-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 sm:mb-8">
           <div>
@@ -1490,49 +1620,49 @@ const handleSendCampaign = async () => {
             Create Campaign
           </button>
         </div>
-
-{/* Statistics Cards */}
-<div className="flex flex-col sm:flex-row justify-between items-center gap-6 py-4">
-  {/* Total Card */}
-  <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
-    <CardContent className="p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-zinc-400 text-base sm:text-lg font-medium">Total</p>
-          <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.total}</p>
+  
+        {/* Statistics Cards */}
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-6 py-4">
+          {/* Total Card */}
+          <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-zinc-400 text-base sm:text-lg font-medium">Total</p>
+                  <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.total}</p>
+                </div>
+                <MessageSquare className="h-10 w-10 sm:h-12 sm:w-12 text-blue-500" />
+              </div>
+            </CardContent>
+          </Card>
+  
+          {/* Completed Card */}
+          <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-zinc-400 text-base sm:text-lg font-medium">Completed</p>
+                  <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.completed}</p>
+                </div>
+                <CheckCircle className="h-10 w-10 sm:h-12 sm:w-12 text-green-500" />
+              </div>
+            </CardContent>
+          </Card>
+  
+          {/* Failed Card */}
+          <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-zinc-400 text-base sm:text-lg font-medium">Failed</p>
+                  <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.failed}</p>
+                </div>
+                <XCircle className="h-10 w-10 sm:h-12 sm:w-12 text-red-500" />
+              </div>
+            </CardContent>
+          </Card>
         </div>
-        <MessageSquare className="h-10 w-10 sm:h-12 sm:w-12 text-blue-500" />
-      </div>
-    </CardContent>
-  </Card>
-
-  {/* Completed Card */}
-  <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
-    <CardContent className="p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-zinc-400 text-base sm:text-lg font-medium">Completed</p>
-          <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.completed}</p>
-        </div>
-        <CheckCircle className="h-10 w-10 sm:h-12 sm:w-12 text-green-500" />
-      </div>
-    </CardContent>
-  </Card>
-
-  {/* Failed Card */}
-  <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
-    <CardContent className="p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-zinc-400 text-base sm:text-lg font-medium">Failed</p>
-          <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.failed}</p>
-        </div>
-        <XCircle className="h-10 w-10 sm:h-12 sm:w-12 text-red-500" />
-      </div>
-    </CardContent>
-  </Card>
-</div>
-
+  
         {/* Filters and Search */}
         <Card className="bg-zinc-900/80 border-zinc-800/80">
           <CardContent className="p-6">
@@ -1569,95 +1699,96 @@ const handleSendCampaign = async () => {
             </div>
           </CardContent>
         </Card>
-
+  
         {/* Campaigns Table */}
         <Card className="bg-zinc-900/80 border-zinc-800/80">
-        <CardHeader>
-          <CardTitle className="text-zinc-200">Campaigns</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {isLoading ? (
-            <div className="flex items-center justify-center h-64">
-              <div className="flex flex-col items-center">
-                <Loader2 className="h-12 w-12 text-zinc-500 animate-spin mb-4" />
-                <p className="text-zinc-400">Loading campaigns...</p>
+          <CardHeader>
+            <CardTitle className="text-zinc-200">Campaigns</CardTitle>
+          </CardHeader>
+          <CardContent>
+            {isLoading ? (
+              <div className="flex items-center justify-center h-64">
+                <div className="flex flex-col items-center">
+                  <Loader2 className="h-12 w-12 text-zinc-500 animate-spin mb-4" />
+                  <p className="text-zinc-400">Loading campaigns...</p>
+                </div>
               </div>
-            </div>
-          ) : currentCampaigns.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-64">
-              <MessageSquare className="h-16 w-16 text-zinc-600 mb-4" />
-              <h3 className="text-xl font-semibold text-zinc-300 mb-2">No Campaigns Found</h3>
-              <p className="text-zinc-400 mb-6">Create your first campaign to get started.</p>
-              <button
-                onClick={() => setShowCreateCampaign(true)}
-                className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-5 h-12 rounded-xl transition-all duration-300 flex items-center gap-2"
-              >
-                <Plus className="h-5 w-5" />
-                Create Campaign
-              </button>
-            </div>
-          ) : (
-            renderCampaignsTable()
+            ) : currentCampaigns.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-64">
+                <MessageSquare className="h-16 w-16 text-zinc-600 mb-4" />
+                <h3 className="text-xl font-semibold text-zinc-300 mb-2">No Campaigns Found</h3>
+                <p className="text-zinc-400 mb-6">Create your first campaign to get started.</p>
+                <button
+                  onClick={() => setShowCreateCampaign(true)}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-5 h-12 rounded-xl transition-all duration-300 flex items-center gap-2"
+                >
+                  <Plus className="h-5 w-5" />
+                  Create Campaign
+                </button>
+              </div>
+            ) : (
+              renderCampaignsTable()
+            )}
+          </CardContent>
+  
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <CardFooter className="flex flex-col sm:flex-row justify-between items-center mt-6 sm:mt-8 bg-zinc-900 border border-zinc-800 rounded-xl p-4 gap-4">
+              <div className="flex items-center gap-3">
+                <span className="text-zinc-400 text-sm">
+                  Showing {(currentPage - 1) * campaignsPerPage + 1}-
+                  {Math.min(currentPage * campaignsPerPage, totalCampaigns)} of {totalCampaigns} campaigns
+                </span>
+              </div>
+  
+              <div className="flex items-center">
+                <button
+                  onClick={handlePrevPage}
+                  disabled={currentPage === 1}
+                  className={`h-9 w-9 rounded-full transition-all duration-200 flex items-center justify-center ${
+                    currentPage === 1
+                      ? 'text-zinc-600 cursor-not-allowed'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                  }`}
+                  aria-label="Previous page"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+  
+                <div className="flex items-center gap-1 px-2">
+                  {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                    <button
+                      key={page}
+                      onClick={() => setCurrentPage(page)}
+                      className={`h-9 w-9 rounded-full transition-all duration-200 ${
+                        currentPage === page
+                          ? 'bg-zinc-800 text-white hover:bg-zinc-700'
+                          : 'bg-transparent hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                      aria-label={`Page ${page}`}
+                    >
+                      {page}
+                    </button>
+                  ))}
+                </div>
+  
+                <button
+                  onClick={handleNextPage}
+                  disabled={currentPage === totalPages}
+                  className={`h-9 w-9 rounded-full transition-all duration-200 flex items-center justify-center ${
+                    currentPage === totalPages
+                      ? 'text-zinc-600 cursor-not-allowed'
+                      : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                  }`}
+                  aria-label="Next page"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              </div>
+            </CardFooter>
           )}
-        </CardContent>
-
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <CardFooter className="flex flex-col sm:flex-row justify-between items-center mt-6 sm:mt-8 bg-zinc-900 border border-zinc-800 rounded-xl p-4 gap-4">
-            <div className="flex items-center gap-3">
-              <span className="text-zinc-400 text-sm">
-                Showing {(currentPage - 1) * campaignsPerPage + 1}-
-                {Math.min(currentPage * campaignsPerPage, totalCampaigns)} of {totalCampaigns} campaigns
-              </span>
-            </div>
-
-            <div className="flex items-center">
-              <button
-                onClick={handlePrevPage}
-                disabled={currentPage === 1}
-                className={`h-9 w-9 rounded-full transition-all duration-200 flex items-center justify-center ${
-                  currentPage === 1
-                    ? 'text-zinc-600 cursor-not-allowed'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-                }`}
-                aria-label="Previous page"
-              >
-                <ChevronLeft className="h-5 w-5" />
-              </button>
-
-              <div className="flex items-center gap-1 px-2">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
-                  <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`h-9 w-9 rounded-full transition-all duration-200 ${
-                      currentPage === page
-                        ? 'bg-zinc-800 text-white hover:bg-zinc-700'
-                        : 'bg-transparent hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                    }`}
-                    aria-label={`Page ${page}`}
-                  >
-                    {page}
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={handleNextPage}
-                disabled={currentPage === totalPages}
-                className={`h-9 w-9 rounded-full transition-all duration-200 flex items-center justify-center ${
-                  currentPage === totalPages
-                    ? 'text-zinc-600 cursor-not-allowed'
-                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
-                }`}
-                aria-label="Next page"
-              >
-                <ChevronRight className="h-5 w-5" />
-              </button>
-            </div>
-          </CardFooter>
-        )}
-      </Card>
+        </Card>
+  
         {/* Create Campaign Dialog */}
         <Dialog open={showCreateCampaign} onOpenChange={setShowCreateCampaign}>
           <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-6xl max-h-[90vh] overflow-y-auto">
@@ -1703,7 +1834,7 @@ const handleSendCampaign = async () => {
             <div className="min-h-[400px]">
               {renderStepContent()}
             </div>
-
+  
             {/* Navigation Buttons */}
             <div className="flex justify-between items-center pt-6 border-t border-zinc-800">
               <Button
@@ -1728,10 +1859,96 @@ const handleSendCampaign = async () => {
             </div>
           </DialogContent>
         </Dialog>
-
+  
         {/* Campaign Details Dialog */}
         {renderCampaignDetails()}
-
+  
+        {/* Sending Progress Dialog */}
+        <Dialog open={sendingProgressDialogOpen} onOpenChange={setSendingProgressDialogOpen}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-lg">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-semibold">Sending Messages</DialogTitle>
+              <DialogDescription className="text-zinc-400">
+                Sending campaign messages to recipients
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="p-6 space-y-6">
+              {/* Progress Bar */}
+              <div className="w-full bg-zinc-800 rounded-full h-2">
+                <motion.div
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 h-2 rounded-full"
+                  initial={{ width: '0%' }}
+                  animate={{ width: `${(sendProgress.length / recipients.length) * 100}%` }}
+                  transition={{ duration: 0.5, ease: 'easeInOut' }}
+                />
+              </div>
+              <p className="text-zinc-400 text-sm">
+                {sendProgress.length} of {recipients.length} messages sent
+              </p>
+  
+              {/* Current Message Animation */}
+              <AnimatePresence mode="wait">
+                {currentSendingIndex >= 0 && currentSendingIndex < recipients.length && (
+                  <motion.div
+                    key={currentSendingIndex}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -20 }}
+                    transition={{ duration: 0.3 }}
+                    className="flex items-center justify-between p-4 bg-zinc-800 rounded-lg"
+                  >
+                    <div>
+                      <p className="text-zinc-200 font-medium">Sending to: {recipients[currentSendingIndex].phone}</p>
+                      <p className="text-zinc-400 text-sm">Recipient {currentSendingIndex + 1} of {recipients.length}</p>
+                    </div>
+                    <Loader2 className="h-6 w-6 text-blue-500 animate-spin" />
+                  </motion.div>
+                )}
+              </AnimatePresence>
+  
+              {/* Previously Sent Messages */}
+              {sendProgress.length > 0 && (
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {sendProgress.map((response, index) => (
+                    <motion.div
+                      key={index}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ duration: 0.3, delay: index * 0.1 }}
+                      className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg"
+                    >
+                      <div>
+                        <p className="text-zinc-200">{response.phone}</p>
+                        <p className="text-zinc-400 text-sm">{response.message}</p>
+                      </div>
+                      {response.status ? (
+                        <CheckCircle className="h-5 w-5 text-green-500" />
+                      ) : (
+                        <AlertCircle className="h-5 w-5 text-red-500" />
+                      )}
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+  
+              {/* Final Success Animation */}
+              {sendProgress.length === recipients.length && recipients.length > 0 && (
+                <motion.div
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ duration: 0.5, ease: 'backOut' }}
+                  className="flex flex-col items-center justify-center py-6"
+                >
+                  <CheckCircle className="h-16 w-16 text-green-500 mb-4" />
+                  <p className="text-xl font-semibold text-zinc-200">All Messages Sent!</p>
+                  <p className="text-zinc-400">Campaign completed successfully</p>
+                </motion.div>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+  
         {/* Import Excel Modal */}
         <Dialog open={importModalOpen} onOpenChange={(open) => {
           setImportModalOpen(open);
@@ -1884,63 +2101,10 @@ const handleSendCampaign = async () => {
             </div>
           </DialogContent>
         </Dialog>
-
+  
         {/* Send Responses Dialog */}
-        <Dialog open={responseDialogOpen} onOpenChange={setResponseDialogOpen}>
-          <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[80vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle className="text-xl font-semibold">Send Responses</DialogTitle>
-              <DialogDescription className="text-zinc-400">
-                Review the status of messages sent in the campaign
-              </DialogDescription>
-            </DialogHeader>
-            
-            <div className="p-6 space-y-6">
-              {sendResponses.length === 0 ? (
-                <div className="text-center py-8">
-                  <MessageSquare className="h-12 w-12 text-zinc-500 mx-auto mb-4" />
-                  <p className="text-zinc-400">No responses available</p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow className="border-zinc-800">
-                        <TableHead className="text-zinc-400">Phone</TableHead>
-                        <TableHead className="text-zinc-400">Status</TableHead>
-                        <TableHead className="text-zinc-400">Message</TableHead>
-                        <TableHead className="text-zinc-400">Instance ID</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {sendResponses.map((response, index) => (
-                        <TableRow key={index} className="border-zinc-800">
-                          <TableCell className="text-zinc-200">{response.phone}</TableCell>
-                          <TableCell>
-                            <Badge className={response.status ? 'bg-green-500' : 'bg-red-500'}>
-                              {response.status ? 'Success' : 'Failed'}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-zinc-200">{response.message}</TableCell>
-                          <TableCell className="text-zinc-200">{response.instanceId}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
-              <div className="flex justify-end">
-                <Button
-                  onClick={() => setResponseDialogOpen(false)}
-                  className="bg-zinc-800 hover:bg-zinc-700 text-white"
-                >
-                  Close
-                </Button>
-              </div>  
-            </div>
-          </DialogContent>
-        </Dialog>
+        
       </div>
     </div>
   );
-}
+                      }
