@@ -1,4 +1,3 @@
-
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -12,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Checkbox } from "@/components/ui/checkbox";
+
 import { 
   Plus, 
   Send, 
@@ -45,7 +45,8 @@ import {
   Check,
   X,
   ArrowLeft,
-  ArrowRight
+  ArrowRight,
+  Info
 } from 'lucide-react';
 import Cookies from 'js-cookie';
 import { useRouter } from 'next/navigation';
@@ -95,7 +96,7 @@ interface Campaign {
   };
   instances: Instance[];
   recipients: Recipient[];
-  status: 'draft' | 'scheduled' | 'sending' | 'completed' | 'failed' | 'paused';
+  status:  'completed' | 'failed' ;
   totalMessages: number;
   sentMessages: number;
   failedMessages: number;
@@ -116,21 +117,20 @@ interface ExcelRow {
 
 interface CampaignStats {
   total: number;
-  draft: number;
-  scheduled: number;
-  sending: number;
   completed: number;
   failed: number;
-  paused: number;
+}
+
+interface ToastMessage {
+  id: string;
+  message: string;
+  type: 'success' | 'error' | 'info' | 'warning';
+  timestamp: number;
 }
 
 const CAMPAIGN_STATUS = {
-  draft: { label: 'Draft', color: 'bg-gray-500', icon: Edit },
-  scheduled: { label: 'Scheduled', color: 'bg-blue-500', icon: Calendar },
-  sending: { label: 'Sending', color: 'bg-yellow-500', icon: Send },
   completed: { label: 'Completed', color: 'bg-green-500', icon: CheckCircle },
-  failed: { label: 'Failed', color: 'bg-red-500', icon: XCircle },
-  paused: { label: 'Paused', color: 'bg-orange-500', icon: Clock }
+  failed: { label: 'Failed', color: 'bg-red-500', icon: XCircle }
 };
 
 const CAMPAIGN_STEPS = [
@@ -158,21 +158,20 @@ export default function MessagingPage() {
   const [campaignName, setCampaignName] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [campaignsPerPage] = useState(10);
+  const [totalCampaigns, setTotalCampaigns] = useState(0);
   const [searchValue, setSearchValue] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [campaignStats, setCampaignStats] = useState<CampaignStats>({
     total: 0,
-    draft: 0,
-    scheduled: 0,
-    sending: 0,
     completed: 0,
-    failed: 0,
-    paused: 0
+    failed: 0
   });
   const [showCreateCampaign, setShowCreateCampaign] = useState(false);
   const [isCreatingCampaign, setIsCreatingCampaign] = useState(false);
   const [selectedCampaign, setSelectedCampaign] = useState<Campaign | null>(null);
   const [showCampaignDetails, setShowCampaignDetails] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<{ [key: string]: boolean }>({});
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   
   // Campaign Creation Wizard State
   const [currentStep, setCurrentStep] = useState(1);
@@ -205,6 +204,58 @@ export default function MessagingPage() {
     var10: ''
   });
 
+  // Enhanced toast system matching connection page
+  const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
+    const id = Date.now().toString();
+    const newToast: ToastMessage = {
+      id,
+      message,
+      type,
+      timestamp: Date.now()
+    };
+    
+    setToasts(prev => [...prev, newToast]);
+    
+    // Auto remove after 5 seconds
+    setTimeout(() => {
+      removeToast(id);
+    }, 5000);
+  };
+
+  const removeToast = (id: string) => {
+    setToasts(prev => prev.filter(toast => toast.id !== id));
+  };
+
+  const getToastIcon = (type: string) => {
+    switch (type) {
+      case 'success':
+        return <CheckCircle className="h-5 w-5" />;
+      case 'error':
+        return <AlertCircle className="h-5 w-5" />;
+      case 'warning':
+        return <AlertCircle className="h-5 w-5" />;
+      case 'info':
+        return <Info className="h-5 w-5" />;
+      default:
+        return <Info className="h-5 w-5" />;
+    }
+  };
+
+  const getToastStyles = (type: string) => {
+    switch (type) {
+      case 'success':
+        return 'bg-emerald-900/90 border-emerald-700 text-emerald-100';
+      case 'error':
+        return 'bg-red-900/90 border-red-700 text-red-100';
+      case 'warning':
+        return 'bg-amber-900/90 border-amber-700 text-amber-100';
+      case 'info':
+        return 'bg-blue-900/90 border-blue-700 text-blue-100';
+      default:
+        return 'bg-zinc-900/90 border-zinc-700 text-zinc-100';
+    }
+  };
+
   const getToken = async (): Promise<string | null | undefined> => {
     let token: string | null | undefined = Cookies.get('token');
     if (!token) {
@@ -219,7 +270,7 @@ export default function MessagingPage() {
 
   const handleUnauthorized = () => {
     console.warn('Unauthorized response received');
-    toast.error('Session expired. Please log in again.');
+    showToast('Session expired. Please log in again.', 'error');
     Cookies.remove('token', { path: '/', secure: window.location.protocol === 'https:', sameSite: 'Lax' });
     localStorage.removeItem('token');
     Cookies.remove('user', { path: '/', secure: window.location.protocol === 'https:', sameSite: 'Lax' });
@@ -227,14 +278,13 @@ export default function MessagingPage() {
     router.push('/login');
   };
 
-  // Fetch data
   const fetchData = useCallback(async () => {
     const token = await getToken();
     if (!token) {
       router.push('/login');
       return;
     }
-  
+
     setIsLoading(true);
     try {
       // Fetch instances
@@ -246,32 +296,31 @@ export default function MessagingPage() {
         },
         body: JSON.stringify({}),
       });
-  
+
       if (instanceResponse.status === 401) {
         handleUnauthorized();
         return;
       }
-  
+
       const instanceData = await instanceResponse.json();
       const fetchedInstances = instanceData.status ? instanceData.instances || [] : [];
-      setInstances(fetchedInstances); // Update state with fetched instances
+      setInstances(fetchedInstances);
 
-      
-      // Fetch campaigns
+      // Fetch campaigns with pagination (send 0-based page)
       const campaignResponse = await fetch('https://whatsapp.recuperafly.com/api/template/message/all', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ page: currentPage - 1, limit: campaignsPerPage }),
       });
-  
+
       if (campaignResponse.status === 401) {
         handleUnauthorized();
         return;
       }
-  
+
       const campaignData = await campaignResponse.json();
       if (campaignData.status) {
         const mappedCampaigns: Campaign[] = campaignData.messages.map((msg: any) => ({
@@ -297,41 +346,27 @@ export default function MessagingPage() {
           createdAt: msg.createdAt,
           delayRange: msg.settings.delayRange,
         }));
-  
+
         setCampaigns(mappedCampaigns);
-  
-        // Calculate stats
-        const stats = mappedCampaigns.reduce(
-          (acc, campaign) => {
-            acc.total++;
-            acc[campaign.status]++;
-            return acc;
-          },
-          {
-            total: 0,
-            draft: 0,
-            scheduled: 0,
-            sending: 0,
-            completed: 0,
-            failed: 0,
-            paused: 0,
-          }
-        );
-  
-        setCampaignStats(stats);
+        setTotalCampaigns(campaignData.total || 0);
+        setCampaignStats({
+          total: campaignData.total || 0,
+          completed: campaignData.cumulativeStats?.completed || 0,
+          failed: campaignData.cumulativeStats?.failed || 0,
+        });
       } else {
-        toast.error(campaignData.message || 'Failed to fetch campaigns');
+        showToast(campaignData.message || 'Failed to fetch campaigns', 'error');
       }
     } catch (err) {
-      toast.error('Error fetching data: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      showToast('Error fetching data: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
     } finally {
       setIsLoading(false);
     }
-  }, [router]); // Remove `instances` from dependencies
-  
+  }, [router, currentPage, campaignsPerPage]);
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
 
   const handleRemoveDuplicates = () => {
     const seenPhones = new Set<string>();
@@ -343,14 +378,14 @@ export default function MessagingPage() {
     });
   
     if (uniqueRecipients.length === recipients.length) {
-      toast.info('No duplicate phone numbers found.');
+      showToast('No duplicate phone numbers found.', 'info');
     } else {
       setRecipients(uniqueRecipients.length > 0 ? uniqueRecipients : [{
         phone: '',
         name: '',
         variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' }
       }]);
-      toast.success(`Removed ${recipients.length - uniqueRecipients.length} duplicate recipients.`);
+      showToast(`Removed ${recipients.length - uniqueRecipients.length} duplicate recipients.`, 'success');
     }
   };
   
@@ -360,7 +395,52 @@ export default function MessagingPage() {
       name: '',
       variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' }
     }]);
-    toast.success('All recipients deleted.');
+    showToast('All recipients deleted.', 'success');
+  };
+
+  const handleDeleteCampaign = async (campaignId: string) => {
+    const token = await getToken();
+    if (!token) {
+      showToast('Please log in to delete campaign', 'error');
+      router.push('/login');
+      return;
+    }
+
+    setIsDeleting(prev => ({ ...prev, [campaignId]: true }));
+    try {
+      const response = await fetch('https://whatsapp.recuperafly.com/api/campaigns/delete', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ campaignId }),
+      });
+
+      if (response.status === 401) {
+        handleUnauthorized();
+        return;
+      }
+
+      const data = await response.json();
+      if (data.status) {
+        setCampaigns(prev => prev.filter(c => c._id !== campaignId));
+        
+        // Adjust currentPage if necessary
+        const newTotalPages = Math.ceil((campaigns.length - 1) / campaignsPerPage);
+        if (currentPage > newTotalPages && newTotalPages > 0) {
+          setCurrentPage(newTotalPages);
+        }
+        
+        showToast(data.message || 'Campaign deleted successfully', 'success');
+      } else {
+        showToast(data.message || 'Failed to delete campaign', 'error');
+      }
+    } catch (err) {
+      showToast('Error deleting campaign: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
+    } finally {
+      setIsDeleting(prev => ({ ...prev, [campaignId]: false }));
+    }
   };
 
   const renderCampaignsTable = () => (
@@ -412,7 +492,7 @@ export default function MessagingPage() {
                             setSelectedCampaign(campaign);
                             setShowCampaignDetails(true);
                           }}
-                          className="text-zinc-400 hover:text-zinc-200"
+                          className="text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 px-3 py-1 rounded-lg transition-colors"
                         >
                           <Eye className="h-4 w-4" />
                         </Button>
@@ -428,13 +508,19 @@ export default function MessagingPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          className="text-zinc-400 hover:text-zinc-200"
+                          onClick={() => handleDeleteCampaign(campaign._id)}
+                          disabled={isDeleting[campaign._id]}
+                          className="text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700 px-3 py-1 rounded-lg transition-colors"
                         >
-                          <MoreHorizontal className="h-4 w-4" />
+                          {isDeleting[campaign._id] ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-4 w-4" />
+                          )}
                         </Button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        <p>More Actions</p>
+                        <p>Delete Campaign</p>
                       </TooltipContent>
                     </Tooltip>
                   </TooltipProvider>
@@ -563,10 +649,10 @@ export default function MessagingPage() {
         setTemplates(templateData.templates || []);
         setTotalTemplates(templateData.total || 0);
       } else {
-        toast.error(templateData.message || 'Failed to fetch templates');
+        showToast(templateData.message || 'Failed to fetch templates', 'error');
       }
     } catch (err) {
-      toast.error('Error fetching templates: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      showToast('Error fetching templates: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
     }
   }, [router, templateCurrentPage, templateSearchValue]);
 
@@ -632,7 +718,7 @@ export default function MessagingPage() {
     if (!file) return;
 
     if (!file.name.match(/\.(xlsx|xls|csv)$/)) {
-      toast.error('Please upload a valid Excel or CSV file');
+      showToast('Please upload a valid Excel or CSV file', 'error');
       return;
     }
 
@@ -654,7 +740,7 @@ export default function MessagingPage() {
         }
 
         if (jsonData.length === 0) {
-          toast.error('The uploaded file is empty');
+          showToast('The uploaded file is empty', 'error');
           return;
         }
 
@@ -672,13 +758,13 @@ export default function MessagingPage() {
         setIsExcelDataLoaded(true);
         setShowColumnMapping(true);
       } catch (err) {
-        toast.error('Error parsing file: The file may be corrupted or in an unsupported format.');
+        showToast('Error parsing file: The file may be corrupted or in an unsupported format.', 'error');
         console.error(err);
       }
     };
 
     reader.onerror = () => {
-      toast.error('Error reading the file');
+      showToast('Error reading the file', 'error');
     };
 
     if (file.name.endsWith('.csv')) {
@@ -696,7 +782,7 @@ export default function MessagingPage() {
   // Import recipients from Excel
   const handleImportRecipients = () => {
     if (!columnMappings.name || !columnMappings.phone) {
-      toast.error('Please map both Name and Phone columns');
+      showToast('Please map both Name and Phone columns', 'error');
       return;
     }
 
@@ -734,28 +820,28 @@ export default function MessagingPage() {
       var9: '',
       var10: ''
     });
-    toast.success('Recipients imported successfully');
+    showToast('Recipients imported successfully', 'success');
   };
 
   // Navigation functions
   const handleNext = () => {
     if (currentStep === 1) {
       if (!campaignName.trim()) {
-        toast.error('Please enter a campaign name');
+        showToast('Please enter a campaign name', 'error');
         return;
       }
       if (selectedInstances.length === 0) {
-        toast.error('Please select at least one instance');
+        showToast('Please select at least one instance', 'error');
         return;
       }
     } else if (currentStep === 2) {
       if (!selectedTemplate) {
-        toast.error('Please select a template');
+        showToast('Please select a template', 'error');
         return;
       }
     } else if (currentStep === 3) {
       if (recipients.some((r) => !r.phone || !r.name || r.phone.trim() === '' || r.name.trim() === '')) {
-        toast.error('All recipients must have a valid phone number and name');
+        showToast('All recipients must have a valid phone number and name', 'error');
         return;
       }
     }
@@ -790,19 +876,17 @@ export default function MessagingPage() {
         template: selectedTemplateObj!,
         instances: selectedInstanceObjs,
         recipients,
-        status: 'draft',
         totalMessages: recipients.length * selectedInstances.length,
         sentMessages: 0,
-        deliveredMessages: 0,
         failedMessages: 0,
         createdAt: new Date().toISOString(),
         delayRange
       };
 
       setCampaigns(prev => [newCampaign, ...prev]);
-      setCampaignStats(prev => ({ ...prev, total: prev.total + 1, draft: prev.draft + 1 }));
+      setCampaignStats(prev => ({ ...prev, total: prev.total + 1 }));
       
-      toast.success('Campaign created successfully');
+      showToast('Campaign created successfully', 'success');
       setShowCreateCampaign(false);
       
       // Reset form
@@ -814,7 +898,7 @@ export default function MessagingPage() {
       setDelayRange({ start: 3, end: 5 });
       
     } catch (err) {
-      toast.error('Error creating campaign: ' + (err instanceof Error ? err.message : 'Unknown error'));
+      showToast('Error creating campaign: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
     } finally {
       setIsCreatingCampaign(false);
     }
@@ -866,7 +950,7 @@ const handleSendCampaign = async () => {
 
     setSendResponses(result.responses || []);
     setResponseDialogOpen(true);
-    toast.success('Campaign sent successfully!');
+    showToast('Campaign sent successfully!', 'success');
     setShowCreateCampaign(false);
 
     // Reset form
@@ -878,26 +962,35 @@ const handleSendCampaign = async () => {
     setDelayRange({ start: 3, end: 5 });
 
   } catch (err) {
-    toast.error('Error sending campaign: ' + (err instanceof Error ? err.message : 'Unknown error'));
+    showToast('Error sending campaign: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
   } finally {
     setIsSending(false);
   }
 };
 
-  // Filter campaigns
-  const filteredCampaigns = campaigns.filter(campaign => {
-    const matchesSearch = campaign.name.toLowerCase().includes(searchValue.toLowerCase()) ||
-                         campaign.template.name.toLowerCase().includes(searchValue.toLowerCase());
-    const matchesStatus = statusFilter === 'all' || campaign.status === statusFilter;
-    return matchesSearch && matchesStatus;
-  });
+  // // Filter campaigns
+  // const filteredCampaigns = campaigns.filter(campaign => {
+  //   const matchesSearch = campaign.name.toLowerCase().includes(searchValue.toLowerCase()) ||
+  //                        campaign.template.name.toLowerCase().includes(searchValue.toLowerCase());
+  //   const matchesStatus = statusFilter === 'all' || campaign.status === statusFilter;
+  //   return matchesSearch && matchesStatus;
+  // });
 
   // Paginate campaigns
-  const indexOfLastCampaign = currentPage * campaignsPerPage;
-  const indexOfFirstCampaign = indexOfLastCampaign - campaignsPerPage;
-  const currentCampaigns = filteredCampaigns.slice(indexOfFirstCampaign, indexOfLastCampaign);
-  const totalPages = Math.ceil(filteredCampaigns.length / campaignsPerPage);
+  const totalPages = Math.ceil(totalCampaigns / campaignsPerPage);
+  const currentCampaigns = campaigns; // Use campaigns directly from backend response
 
+  const handleNextPage = () => {
+    if (currentPage < totalPages) {
+      setCurrentPage(currentPage + 1);
+    }
+  };
+
+  const handlePrevPage = () => {
+    if (currentPage > 1) {
+      setCurrentPage(currentPage - 1);
+    }
+  };
   // Template pagination
   const totalTemplatePages = Math.ceil(totalTemplates / templatesPerPage);
 
@@ -1048,7 +1141,7 @@ const handleSendCampaign = async () => {
               </div>
               <Button
                 variant="outline"
-                className="bg-blue-600 hover:bg-blue-700 text-white border-none"
+                className="bg-zinc-800 hover:bg-zinc-700 text-white border-zinc-700"
               >
                 <Plus className="h-4 w-4 mr-2" />
                 Create A New Template
@@ -1156,7 +1249,7 @@ const handleSendCampaign = async () => {
                 <Button
                   variant="outline"
                   onClick={() => setImportModalOpen(true)}
-                  className="bg-blue-600 hover:bg-blue-700 text-white border-none"
+                  className="bg-zinc-800 hover:bg-zinc-700 text-white border-zinc-700"
                 >
                   <Upload className="h-4 w-4 mr-2" />
                   Excel Import
@@ -1329,24 +1422,11 @@ const handleSendCampaign = async () => {
 
             {/* Send Options */}
             <div className="flex gap-4">
-              <Button
-                onClick={handleCreateCampaign}
-                disabled={isCreatingCampaign}
-                className="bg-zinc-800 hover:bg-zinc-700 text-white"
-              >
-                {isCreatingCampaign ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                    Saving...
-                  </>
-                ) : (
-                  'Save as Draft'
-                )}
-              </Button>
+              
               <Button
                 onClick={handleSendCampaign}
                 disabled={isSending}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                className="bg-zinc-800 hover:bg-zinc-700 text-white"
               >
                 {isSending ? (
                   <>
@@ -1370,166 +1450,128 @@ const handleSendCampaign = async () => {
   };
 
   return (
-    <div className="space-y-6 p-6 max-w-7xl mx-auto">
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          duration: 3000,
-          style: {
-            background: '#333',
-            color: '#fff',
-            borderRadius: '8px',
-          },
-        }}
-      />
-
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-        <div>
-          <h1 className="text-3xl font-bold bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent">
-            Messaging Campaigns
-          </h1>
-          <p className="text-zinc-400 mt-2">Manage your WhatsApp messaging campaigns</p>
-        </div>
-        <Button
-          onClick={() => setShowCreateCampaign(true)}
-          className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
-        >
-          <Plus className="h-5 w-5 mr-2" />
-          Create Campaign
-        </Button>
-      </div>
-
-      {/* Statistics Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
-        <Card className="bg-zinc-900/80 border-zinc-800/80">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm">Total</p>
-                <p className="text-2xl font-bold text-white">{campaignStats.total}</p>
-              </div>
-              <MessageSquare className="h-8 w-8 text-blue-500" />
+    <div className="min-h-screen bg-zinc-950 p-4 sm:p-6">
+      {/* Toast Container */}
+      <div className="fixed top-4 right-4 z-50 space-y-2 max-w-sm w-full">
+        {toasts.map((toast) => (
+          <div
+            key={toast.id}
+            className={`flex items-center gap-3 p-4 rounded-lg border backdrop-blur-sm shadow-lg transform transition-all duration-300 ease-in-out ${getToastStyles(toast.type)}`}
+          >
+            <div className="flex-shrink-0">
+              {getToastIcon(toast.type)}
             </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-zinc-900/80 border-zinc-800/80">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm">Draft</p>
-                <p className="text-2xl font-bold text-white">{campaignStats.draft}</p>
-              </div>
-              <Edit className="h-8 w-8 text-gray-500" />
+            <div className="flex-1 text-sm font-medium">
+              {toast.message}
             </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-zinc-900/80 border-zinc-800/80">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm">Scheduled</p>
-                <p className="text-2xl font-bold text-white">{campaignStats.scheduled}</p>
-              </div>
-              <Calendar className="h-8 w-8 text-blue-500" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-zinc-900/80 border-zinc-800/80">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm">Sending</p>
-                <p className="text-2xl font-bold text-white">{campaignStats.sending}</p>
-              </div>
-              <Send className="h-8 w-8 text-yellow-500" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-zinc-900/80 border-zinc-800/80">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm">Completed</p>
-                <p className="text-2xl font-bold text-white">{campaignStats.completed}</p>
-              </div>
-              <CheckCircle className="h-8 w-8 text-green-500" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-zinc-900/80 border-zinc-800/80">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm">Failed</p>
-                <p className="text-2xl font-bold text-white">{campaignStats.failed}</p>
-              </div>
-              <XCircle className="h-8 w-8 text-red-500" />
-            </div>
-          </CardContent>
-        </Card>
-
-        <Card className="bg-zinc-900/80 border-zinc-800/80">
-          <CardContent className="p-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm">Paused</p>
-                <p className="text-2xl font-bold text-white">{campaignStats.paused}</p>
-              </div>
-              <Clock className="h-8 w-8 text-orange-500" />
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Filters and Search */}
-      <Card className="bg-zinc-900/80 border-zinc-800/80">
-        <CardContent className="p-6">
-          <div className="flex flex-col sm:flex-row gap-4">
-            <div className="flex-1">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400" />
-                <Input
-                  placeholder="Search campaigns..."
-                  value={searchValue}
-                  onChange={(e) => setSearchValue(e.target.value)}
-                  className="pl-10 bg-zinc-800 border-zinc-700 text-zinc-200"
-                />
-              </div>
-            </div>
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-full sm:w-48 bg-zinc-800 border-zinc-700 text-zinc-200">
-                <SelectValue placeholder="Filter by status" />
-              </SelectTrigger>
-              <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
-                <SelectItem value="all">All Status</SelectItem>
-                <SelectItem value="draft">Draft</SelectItem>
-                <SelectItem value="scheduled">Scheduled</SelectItem>
-                <SelectItem value="sending">Sending</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="failed">Failed</SelectItem>
-                <SelectItem value="paused">Paused</SelectItem>
-              </SelectContent>
-            </Select>
-            <Button
-              variant="outline"
-              onClick={() => fetchData()}
-              className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="flex-shrink-0 p-1 rounded-full hover:bg-white/10 transition-colors"
             >
-              <RefreshCw className="h-4 w-4 mr-2" />
-              Refresh
-            </Button>
+              <X className="h-4 w-4" />
+            </button>
           </div>
-        </CardContent>
-      </Card>
+        ))}
+      </div>
 
-      {/* Campaigns Table */}
-      <Card className="bg-zinc-900/80 border-zinc-800/80">
+      <div className="max-w-7xl mx-auto space-y-6 sm:space-y-8">
+        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 sm:mb-8">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-bold text-white">
+              Messaging Campaigns
+            </h1>
+            <p className="text-zinc-400 mt-2">Manage your WhatsApp messaging campaigns</p>
+          </div>
+          <button
+            onClick={() => setShowCreateCampaign(true)}
+            className="w-full sm:w-auto bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-5 py-2 h-12 rounded-xl transition-all duration-300 flex items-center justify-center gap-2"
+          >
+            <Plus className="h-5 w-5" />
+            Create Campaign
+          </button>
+        </div>
+
+{/* Statistics Cards */}
+<div className="flex flex-col sm:flex-row justify-between items-center gap-6 py-4">
+  {/* Total Card */}
+  <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
+    <CardContent className="p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-zinc-400 text-base sm:text-lg font-medium">Total</p>
+          <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.total}</p>
+        </div>
+        <MessageSquare className="h-10 w-10 sm:h-12 sm:w-12 text-blue-500" />
+      </div>
+    </CardContent>
+  </Card>
+
+  {/* Completed Card */}
+  <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
+    <CardContent className="p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-zinc-400 text-base sm:text-lg font-medium">Completed</p>
+          <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.completed}</p>
+        </div>
+        <CheckCircle className="h-10 w-10 sm:h-12 sm:w-12 text-green-500" />
+      </div>
+    </CardContent>
+  </Card>
+
+  {/* Failed Card */}
+  <Card className="bg-zinc-900/80 border-zinc-800/80 w-full sm:w-80 transform hover:scale-105 transition-transform duration-200">
+    <CardContent className="p-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-zinc-400 text-base sm:text-lg font-medium">Failed</p>
+          <p className="text-3xl sm:text-4xl font-bold text-white">{campaignStats.failed}</p>
+        </div>
+        <XCircle className="h-10 w-10 sm:h-12 sm:w-12 text-red-500" />
+      </div>
+    </CardContent>
+  </Card>
+</div>
+
+        {/* Filters and Search */}
+        <Card className="bg-zinc-900/80 border-zinc-800/80">
+          <CardContent className="p-6">
+            <div className="flex flex-col sm:flex-row gap-4">
+              <div className="flex-1">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-zinc-400" />
+                  <Input
+                    placeholder="Search campaigns..."
+                    value={searchValue}
+                    onChange={(e) => setSearchValue(e.target.value)}
+                    className="pl-10 bg-zinc-800 border-zinc-700 text-zinc-200"
+                  />
+                </div>
+              </div>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-full sm:w-48 bg-zinc-800 border-zinc-700 text-zinc-200">
+                  <SelectValue placeholder="Filter by status" />
+                </SelectTrigger>
+                <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                  <SelectItem value="all">All Status</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="failed">Failed</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                onClick={() => fetchData()}
+                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+              >
+                <RefreshCw className="h-4 w-4 mr-2" />
+                Refresh
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Campaigns Table */}
+        <Card className="bg-zinc-900/80 border-zinc-800/80">
         <CardHeader>
           <CardTitle className="text-zinc-200">Campaigns</CardTitle>
         </CardHeader>
@@ -1537,7 +1579,7 @@ const handleSendCampaign = async () => {
           {isLoading ? (
             <div className="flex items-center justify-center h-64">
               <div className="flex flex-col items-center">
-                <Loader2 className="h-12 w-12 text-blue-500 animate-spin mb-4" />
+                <Loader2 className="h-12 w-12 text-zinc-500 animate-spin mb-4" />
                 <p className="text-zinc-400">Loading campaigns...</p>
               </div>
             </div>
@@ -1546,420 +1588,359 @@ const handleSendCampaign = async () => {
               <MessageSquare className="h-16 w-16 text-zinc-600 mb-4" />
               <h3 className="text-xl font-semibold text-zinc-300 mb-2">No Campaigns Found</h3>
               <p className="text-zinc-400 mb-6">Create your first campaign to get started.</p>
-              <Button
+              <button
                 onClick={() => setShowCreateCampaign(true)}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                className="bg-zinc-800 hover:bg-zinc-700 text-white font-medium px-5 h-12 rounded-xl transition-all duration-300 flex items-center gap-2"
               >
-                <Plus className="h-5 w-5 mr-2" />
+                <Plus className="h-5 w-5" />
                 Create Campaign
-              </Button>
+              </button>
             </div>
           ) : (
             renderCampaignsTable()
           )}
         </CardContent>
-        
+
         {/* Pagination */}
         {totalPages > 1 && (
-          <CardFooter className="flex justify-between items-center">
-            <p className="text-zinc-400 text-sm">
-              Showing {indexOfFirstCampaign + 1} to {Math.min(indexOfLastCampaign, filteredCampaigns.length)} of {filteredCampaigns.length} campaigns
-            </p>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-                disabled={currentPage === 1}
-                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-              >
-                Previous
-              </Button>
+          <CardFooter className="flex flex-col sm:flex-row justify-between items-center mt-6 sm:mt-8 bg-zinc-900 border border-zinc-800 rounded-xl p-4 gap-4">
+            <div className="flex items-center gap-3">
               <span className="text-zinc-400 text-sm">
-                Page {currentPage} of {totalPages}
+                Showing {(currentPage - 1) * campaignsPerPage + 1}-
+                {Math.min(currentPage * campaignsPerPage, totalCampaigns)} of {totalCampaigns} campaigns
               </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-                disabled={currentPage === totalPages}
-                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+            </div>
+
+            <div className="flex items-center">
+              <button
+                onClick={handlePrevPage}
+                disabled={currentPage === 1}
+                className={`h-9 w-9 rounded-full transition-all duration-200 flex items-center justify-center ${
+                  currentPage === 1
+                    ? 'text-zinc-600 cursor-not-allowed'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                }`}
+                aria-label="Previous page"
               >
-                Next
-              </Button>
+                <ChevronLeft className="h-5 w-5" />
+              </button>
+
+              <div className="flex items-center gap-1 px-2">
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => (
+                  <button
+                    key={page}
+                    onClick={() => setCurrentPage(page)}
+                    className={`h-9 w-9 rounded-full transition-all duration-200 ${
+                      currentPage === page
+                        ? 'bg-zinc-800 text-white hover:bg-zinc-700'
+                        : 'bg-transparent hover:bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    aria-label={`Page ${page}`}
+                  >
+                    {page}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={handleNextPage}
+                disabled={currentPage === totalPages}
+                className={`h-9 w-9 rounded-full transition-all duration-200 flex items-center justify-center ${
+                  currentPage === totalPages
+                    ? 'text-zinc-600 cursor-not-allowed'
+                    : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                }`}
+                aria-label="Next page"
+              >
+                <ChevronRight className="h-5 w-5" />
+              </button>
             </div>
           </CardFooter>
         )}
       </Card>
-
-      {/* Create Campaign Dialog */}
-      <Dialog open={showCreateCampaign} onOpenChange={setShowCreateCampaign}>
-        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-6xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-semibold">Create New Campaign</DialogTitle>
-            <DialogDescription className="text-zinc-400">
-              Connect with your customers through RCS.
-            </DialogDescription>
-          </DialogHeader>
-          
-          {/* Step Indicator */}
-          <div className="flex items-center justify-between mb-8">
-            {CAMPAIGN_STEPS.map((step, index) => (
-              <div key={step.id} className="flex items-center">
-                <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${
-                  currentStep >= step.id 
-                    ? 'bg-blue-600 border-blue-600 text-white' 
-                    : 'border-zinc-600 text-zinc-400'
-                }`}>
-                  {currentStep > step.id ? (
-                    <Check className="h-4 w-4" />
-                  ) : (
-                    <span className="text-sm font-medium">{step.id}</span>
+        {/* Create Campaign Dialog */}
+        <Dialog open={showCreateCampaign} onOpenChange={setShowCreateCampaign}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-6xl max-h-[90vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-semibold">Create New Campaign</DialogTitle>
+              <DialogDescription className="text-zinc-400">
+                Connect with your customers through RCS.
+              </DialogDescription>
+            </DialogHeader>
+            
+            {/* Step Indicator */}
+            <div className="flex items-center justify-between mb-8">
+              {CAMPAIGN_STEPS.map((step, index) => (
+                <div key={step.id} className="flex items-center">
+                  <div className={`flex items-center justify-center w-8 h-8 rounded-full border-2 ${
+                    currentStep >= step.id 
+                      ? 'bg-blue-600 border-blue-600 text-white' 
+                      : 'border-zinc-600 text-zinc-400'
+                  }`}>
+                    {currentStep > step.id ? (
+                      <Check className="h-4 w-4" />
+                    ) : (
+                      <span className="text-sm font-medium">{step.id}</span>
+                    )}
+                  </div>
+                  <div className="ml-3 hidden sm:block">
+                    <p className={`text-sm font-medium ${
+                      currentStep >= step.id ? 'text-zinc-200' : 'text-zinc-400'
+                    }`}>
+                      {step.title}
+                    </p>
+                  </div>
+                  {index < CAMPAIGN_STEPS.length - 1 && (
+                    <div className={`hidden sm:block w-16 h-0.5 ml-4 ${
+                      currentStep > step.id ? 'bg-blue-600' : 'bg-zinc-600'
+                    }`} />
                   )}
                 </div>
-                <div className="ml-3 hidden sm:block">
-                  <p className={`text-sm font-medium ${
-                    currentStep >= step.id ? 'text-zinc-200' : 'text-zinc-400'
-                  }`}>
-                    {step.title}
-                  </p>
-                </div>
-                {index < CAMPAIGN_STEPS.length - 1 && (
-                  <div className={`hidden sm:block w-16 h-0.5 ml-4 ${
-                    currentStep > step.id ? 'bg-blue-600' : 'bg-zinc-600'
-                  }`} />
-                )}
-              </div>
-            ))}
-          </div>
-          
-          {/* Step Content */}
-          <div className="min-h-[400px]">
-            {renderStepContent()}
-          </div>
-
-          {/* Navigation Buttons */}
-          <div className="flex justify-between items-center pt-6 border-t border-zinc-800">
-            <Button
-              variant="outline"
-              onClick={handleBack}
-              disabled={currentStep === 1}
-              className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-            >
-              <ArrowLeft className="h-4 w-4 mr-2" />
-              Back
-            </Button>
+              ))}
+            </div>
             
-            {currentStep < 4 ? (
+            {/* Step Content */}
+            <div className="min-h-[400px]">
+              {renderStepContent()}
+            </div>
+
+            {/* Navigation Buttons */}
+            <div className="flex justify-between items-center pt-6 border-t border-zinc-800">
               <Button
-                onClick={handleNext}
-                className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+                variant="outline"
+                onClick={handleBack}
+                disabled={currentStep === 1}
+                className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
               >
-                Next
-                <ArrowRight className="h-4 w-4 ml-2" />
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back
               </Button>
-            ) : null}
-          </div>
-        </DialogContent>
-      </Dialog>
+              
+              {currentStep < 4 ? (
+                <Button
+                  onClick={handleNext}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-white"
+                >
+                  Next
+                  <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              ) : null}
+            </div>
+          </DialogContent>
+        </Dialog>
 
-      {/* Campaign Details Dialog */}
-      <Dialog open={showCampaignDetails} onOpenChange={setShowCampaignDetails}>
-        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-semibold">
-              Campaign Details: {selectedCampaign?.name}
-            </DialogTitle>
-            <DialogDescription className="text-zinc-400">
-              View detailed information about this campaign
-            </DialogDescription>
-          </DialogHeader>
-          
-          {selectedCampaign && (
-            <div className="space-y-6 p-6">
-              {/* Campaign Info */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-zinc-400">Campaign Name</Label>
-                    <p className="text-zinc-200 font-medium">{selectedCampaign.name}</p>
-                  </div>
-                  <div>
-                    <Label className="text-zinc-400">Status</Label>
-                    <div className="mt-1">{getStatusBadge(selectedCampaign.status)}</div>
-                  </div>
-                  <div>
-                    <Label className="text-zinc-400">Template</Label>
-                    <p className="text-zinc-200">{selectedCampaign.template.name}</p>
-                  </div>
-                  <div>
-                    <Label className="text-zinc-400">Instances</Label>
-                    <p className="text-zinc-200">{selectedCampaign.instances.length} instances</p>
-                  </div>
-                </div>
-                
-                <div className="space-y-4">
-                  <div>
-                    <Label className="text-zinc-400">Total Messages</Label>
-                    <p className="text-zinc-200 font-medium">{selectedCampaign.totalMessages}</p>
-                  </div>
-                  <div>
-                    <Label className="text-zinc-400">Delivered</Label>
-                    <p className="text-green-400 font-medium">{selectedCampaign.deliveredMessages}</p>
-                  </div>
-                  <div>
-                    <Label className="text-zinc-400">Failed</Label>
-                    <p className="text-red-400 font-medium">{selectedCampaign.failedMessages}</p>
-                  </div>
-                  <div>
-                    <Label className="text-zinc-400">Delay Range</Label>
-                    <p className="text-zinc-200">{selectedCampaign.delayRange.start}s - {selectedCampaign.delayRange.end}s</p>
-                  </div>
-                </div>
-              </div>
+        {/* Campaign Details Dialog */}
+        {renderCampaignDetails()}
 
-              {/* Progress Bar */}
-              <div className="space-y-2">
-                <Label className="text-zinc-400">Progress</Label>
-                <div className="w-full bg-zinc-800 rounded-full h-2">
-                  <div 
-                    className="bg-gradient-to-r from-blue-600 to-indigo-600 h-2 rounded-full transition-all duration-300"
-                    style={{ 
-                      width: `${selectedCampaign.totalMessages > 0 ? (selectedCampaign.sentMessages / selectedCampaign.totalMessages) * 100 : 0}%` 
-                    }}
+        {/* Import Excel Modal */}
+        <Dialog open={importModalOpen} onOpenChange={(open) => {
+          setImportModalOpen(open);
+          if (!open) {
+            setExcelData([]);
+            setExcelHeaders([]);
+            setIsExcelDataLoaded(false);
+            setShowColumnMapping(false);
+            setColumnMappings({
+              name: '',
+              phone: '',
+              var1: '',
+              var2: '',
+              var3: '',
+              var4: '',
+              var5: '',
+              var6: '',
+              var7: '',
+              var8: '',
+              var9: '',
+              var10: ''
+            });
+          }
+        }}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-semibold">Import Recipients</DialogTitle>
+              <DialogDescription className="text-zinc-400">
+                Upload Excel or CSV file and map columns to import recipients
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="p-6 space-y-6">
+              {!isExcelDataLoaded ? (
+                <div className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-700 rounded-lg py-12">
+                  <Upload className="h-12 w-12 text-zinc-500 mb-4" />
+                  <Label className="text-zinc-400 mb-4">Upload .xlsx, .xls or .csv file</Label>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="bg-zinc-800 hover:bg-zinc-700 text-white border-zinc-700"
+                    onClick={() => document.getElementById('file-upload')?.click()}
+                  >
+                    Select File
+                  </Button>
+                  <input
+                    id="file-upload"
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={handleFileUpload}
                   />
                 </div>
-                <p className="text-zinc-400 text-sm">
-                  {selectedCampaign.sentMessages} of {selectedCampaign.totalMessages} messages sent
-                </p>
-              </div>
-
-              {/* Timestamps */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <Label className="text-zinc-400">Created At</Label>
-                  <p className="text-zinc-200">{formatDate(selectedCampaign.createdAt)}</p>
-                </div>
-                {selectedCampaign.completedAt && (
-                  <div>
-                    <Label className="text-zinc-400">Completed At</Label>
-                    <p className="text-zinc-200">{formatDate(selectedCampaign.completedAt)}</p>
+              ) : !showColumnMapping ? (
+                <div className="space-y-4">
+                  <Label className="text-zinc-400 font-medium">Preview Data</Label>
+                  <div className="overflow-x-auto max-h-64">
+                    <Table>
+                      <TableHeader>
+                        <TableRow className="border-zinc-800">
+                          {excelHeaders.map((header, idx) => (
+                            <TableHead key={idx} className="text-zinc-400">
+                              {header}
+                            </TableHead>
+                          ))}
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {excelData.slice(0, 5).map((row, rowIdx) => (
+                          <TableRow key={rowIdx} className="border-zinc-800">
+                            {excelHeaders.map((header, colIdx) => (
+                              <TableCell key={colIdx} className="text-zinc-200">
+                                {row[header]}
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
                   </div>
-                )}
-              </div>
+                  
+                  <div className="flex justify-end space-x-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setImportModalOpen(false);
+                        setExcelData([]);
+                        setExcelHeaders([]);
+                        setIsExcelDataLoaded(false);
+                      }}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={() => setShowColumnMapping(true)}
+                      className="bg-zinc-800 hover:bg-zinc-700 text-white"
+                    >
+                      Map Columns
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <Label className="text-zinc-400 font-medium">Map Columns</Label>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {['name', 'phone', ...Array.from({ length: 10 }, (_, i) => `var${i + 1}`)].map(field => (
+                      <div key={field} className="space-y-2">
+                        <Label className="text-zinc-400">{field === 'name' ? 'Name *' : field === 'phone' ? 'Phone *' : `Variable ${field.slice(3)}`}</Label>
+                        <Select
+                          value={columnMappings[field]}
+                          onValueChange={(value) => handleColumnMappingChange(field, value)}
+                        >
+                          <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                            <SelectValue placeholder={`Select column for ${field}`} />
+                          </SelectTrigger>
+                          <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
+                            <SelectItem value="none">None</SelectItem>
+                            {excelHeaders.map(header => (
+                              <SelectItem key={header} value={header}>{header}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    ))}
+                  </div>
+                  
+                  <div className="flex justify-end space-x-4">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => setShowColumnMapping(false)}
+                      className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
+                    >
+                      Back
+                    </Button>
+                    <Button
+                      type="button"
+                      onClick={handleImportRecipients}
+                      className="bg-zinc-800 hover:bg-zinc-700 text-white"
+                      disabled={!columnMappings.name || !columnMappings.phone}
+                    >
+                      Import
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </DialogContent>
-      </Dialog>
+          </DialogContent>
+        </Dialog>
 
-      {/* Import Excel Modal */}
-      <Dialog open={importModalOpen} onOpenChange={(open) => {
-        setImportModalOpen(open);
-        if (!open) {
-          setExcelData([]);
-          setExcelHeaders([]);
-          setIsExcelDataLoaded(false);
-          setShowColumnMapping(false);
-          setColumnMappings({
-            name: '',
-            phone: '',
-            var1: '',
-            var2: '',
-            var3: '',
-            var4: '',
-            var5: '',
-            var6: '',
-            var7: '',
-            var8: '',
-            var9: '',
-            var10: ''
-          });
-        }
-      }}>
-        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-semibold">Import Recipients</DialogTitle>
-            <DialogDescription className="text-zinc-400">
-              Upload Excel or CSV file and map columns to import recipients
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="p-6 space-y-6">
-            {!isExcelDataLoaded ? (
-              <div className="flex flex-col items-center justify-center border-2 border-dashed border-zinc-700 rounded-lg py-12">
-                <Upload className="h-12 w-12 text-zinc-500 mb-4" />
-                <Label className="text-zinc-400 mb-4">Upload .xlsx, .xls or .csv file</Label>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="bg-blue-600 hover:bg-blue-700 text-white border-none"
-                  onClick={() => document.getElementById('file-upload')?.click()}
-                >
-                  Select File
-                </Button>
-                <input
-                  id="file-upload"
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  className="hidden"
-                  onChange={handleFileUpload}
-                />
-              </div>
-            ) : !showColumnMapping ? (
-              <div className="space-y-4">
-                <Label className="text-zinc-400 font-medium">Preview Data</Label>
-                <div className="overflow-x-auto max-h-64">
+        {/* Send Responses Dialog */}
+        <Dialog open={responseDialogOpen} onOpenChange={setResponseDialogOpen}>
+          <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle className="text-xl font-semibold">Send Responses</DialogTitle>
+              <DialogDescription className="text-zinc-400">
+                Review the status of messages sent in the campaign
+              </DialogDescription>
+            </DialogHeader>
+            
+            <div className="p-6 space-y-6">
+              {sendResponses.length === 0 ? (
+                <div className="text-center py-8">
+                  <MessageSquare className="h-12 w-12 text-zinc-500 mx-auto mb-4" />
+                  <p className="text-zinc-400">No responses available</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
                   <Table>
                     <TableHeader>
                       <TableRow className="border-zinc-800">
-                        {excelHeaders.map((header, idx) => (
-                          <TableHead key={idx} className="text-zinc-400">
-                            {header}
-                          </TableHead>
-                        ))}
+                        <TableHead className="text-zinc-400">Phone</TableHead>
+                        <TableHead className="text-zinc-400">Status</TableHead>
+                        <TableHead className="text-zinc-400">Message</TableHead>
+                        <TableHead className="text-zinc-400">Instance ID</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {excelData.slice(0, 5).map((row, rowIdx) => (
-                        <TableRow key={rowIdx} className="border-zinc-800">
-                          {excelHeaders.map((header, colIdx) => (
-                            <TableCell key={colIdx} className="text-zinc-200">
-                              {row[header]}
-                            </TableCell>
-                          ))}
+                      {sendResponses.map((response, index) => (
+                        <TableRow key={index} className="border-zinc-800">
+                          <TableCell className="text-zinc-200">{response.phone}</TableCell>
+                          <TableCell>
+                            <Badge className={response.status ? 'bg-green-500' : 'bg-red-500'}>
+                              {response.status ? 'Success' : 'Failed'}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-zinc-200">{response.message}</TableCell>
+                          <TableCell className="text-zinc-200">{response.instanceId}</TableCell>
                         </TableRow>
                       ))}
                     </TableBody>
                   </Table>
                 </div>
-                
-                <div className="flex justify-end space-x-4">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => {
-                      setImportModalOpen(false);
-                      setExcelData([]);
-                      setExcelHeaders([]);
-                      setIsExcelDataLoaded(false);
-                    }}
-                    className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => setShowColumnMapping(true)}
-                    className="bg-blue-600 hover:bg-blue-700 text-white"
-                  >
-                    Map Columns
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <Label className="text-zinc-400 font-medium">Map Columns</Label>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {['name', 'phone', ...Array.from({ length: 10 }, (_, i) => `var${i + 1}`)].map(field => (
-                    <div key={field} className="space-y-2">
-                      <Label className="text-zinc-400">{field === 'name' ? 'Name *' : field === 'phone' ? 'Phone *' : `Variable ${field.slice(3)}`}</Label>
-                      <Select
-                        value={columnMappings[field]}
-                        onValueChange={(value) => handleColumnMappingChange(field, value)}
-                      >
-                        <SelectTrigger className="bg-zinc-800 border-zinc-700 text-zinc-200">
-                          <SelectValue placeholder={`Select column for ${field}`} />
-                        </SelectTrigger>
-                        <SelectContent className="bg-zinc-800 border-zinc-700 text-zinc-200">
-                          <SelectItem value="none">None</SelectItem>
-                          {excelHeaders.map(header => (
-                            <SelectItem key={header} value={header}>{header}</SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-                  ))}
-                </div>
-                
-                <div className="flex justify-end space-x-4">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => setShowColumnMapping(false)}
-                    className="bg-zinc-800 border-zinc-700 text-zinc-200 hover:bg-zinc-700"
-                  >
-                    Back
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={handleImportRecipients}
-                    className="bg-blue-600 hover:bg-blue-700 text-white"
-                    disabled={!columnMappings.name || !columnMappings.phone}
-                  >
-                    Import
-                  </Button>
-                </div>
-              </div>
-            )}
-          </div>
-        </DialogContent>
-      </Dialog>
-
-      {/* Send Responses Dialog */}
-      <Dialog open={responseDialogOpen} onOpenChange={setResponseDialogOpen}>
-        <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-200 max-w-4xl max-h-[80vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle className="text-xl font-semibold">Send Responses</DialogTitle>
-            <DialogDescription className="text-zinc-400">
-              Review the status of messages sent in the campaign
-            </DialogDescription>
-          </DialogHeader>
-          
-          <div className="p-6 space-y-6">
-            {sendResponses.length === 0 ? (
-              <div className="text-center py-8">
-                <MessageSquare className="h-12 w-12 text-zinc-500 mx-auto mb-4" />
-                <p className="text-zinc-400">No responses available</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-zinc-800">
-                      <TableHead className="text-zinc-400">Phone</TableHead>
-                      <TableHead className="text-zinc-400">Status</TableHead>
-                      <TableHead className="text-zinc-400">Message</TableHead>
-                      <TableHead className="text-zinc-400">Instance ID</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {sendResponses.map((response, index) => (
-                      <TableRow key={index} className="border-zinc-800">
-                        <TableCell className="text-zinc-200">{response.phone}</TableCell>
-                        <TableCell>
-                          <Badge className={response.status ? 'bg-green-500' : 'bg-red-500'}>
-                            {response.status ? 'Success' : 'Failed'}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-zinc-200">{response.message}</TableCell>
-                        <TableCell className="text-zinc-200">{response.instanceId}</TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-            <div className="flex justify-end">
-              <Button
-                onClick={() => setResponseDialogOpen(false)}
-                className="bg-zinc-800 hover:bg-zinc-700 text-white"
-              >
-                Close
-              </Button>
-            </div>  
-          </div>
-        </DialogContent>
-      </Dialog>
+              )}
+              <div className="flex justify-end">
+                <Button
+                  onClick={() => setResponseDialogOpen(false)}
+                  className="bg-zinc-800 hover:bg-zinc-700 text-white"
+                >
+                  Close
+                </Button>
+              </div>  
+            </div>
+          </DialogContent>
+        </Dialog>
+      </div>
     </div>
   );
 }
