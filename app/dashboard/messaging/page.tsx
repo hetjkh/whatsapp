@@ -821,66 +821,68 @@ export default function MessagingPage() {
   };
 
   // Send campaign
-  const handleSendCampaign = async () => {
-    const token = await getToken();
-    if (!token) {
-      router.push('/login');
+// Send campaign
+const handleSendCampaign = async () => {
+  const token = await getToken();
+  if (!token) {
+    router.push('/login');
+    return;
+  }
+
+  setIsSending(true);
+  try {
+    const payload = {
+      name: campaignName, // Include campaign name as per new API structure
+      templateId: selectedTemplate,
+      instanceIds: selectedInstances,
+      recipients: recipients.map(({ phone, name, variables }) => ({
+        phone,
+        name,
+        variables: Object.fromEntries(
+          Object.entries(variables).filter(([_, value]) => value.trim() !== '')
+        ),
+      })),
+      delayRange,
+    };
+
+    const response = await fetch('https://whatsapp.recuperafly.com/api/template/send', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.status === 401) {
+      handleUnauthorized();
       return;
     }
 
-    setIsSending(true);
-    try {
-      const payload = {
-        templateId: selectedTemplate,
-        instanceIds: selectedInstances,
-        recipients: recipients.map(({ phone, name, variables }) => ({
-          phone,
-          name,
-          variables: Object.fromEntries(
-            Object.entries(variables).filter(([_, value]) => value.trim() !== '')
-          )
-        })),
-        delayRange
-      };
-
-      const response = await fetch('https://whatsapp.recuperafly.com/api/template/send', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-      });
-
-      if (response.status === 401) {
-        handleUnauthorized();
-        return;
-      }
-
-      const result = await response.json();
-      if (!result.status) {
-        throw new Error(result.message || 'Failed to send campaign');
-      }
-
-      setSendResponses(result.responses || []);
-      setResponseDialogOpen(true);
-      toast.success('Campaign sent successfully!');
-      setShowCreateCampaign(false);
-      
-      // Reset form
-      setCampaignName('');
-      setSelectedTemplate('');
-      setSelectedInstances([]);
-      setRecipients([{ phone: '', name: '', variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' } }]);
-      setCurrentStep(1);
-      setDelayRange({ start: 3, end: 5 });
-      
-    } catch (err) {
-      toast.error('Error sending campaign: ' + (err instanceof Error ? err.message : 'Unknown error'));
-    } finally {
-      setIsSending(false);
+    const result = await response.json();
+    if (!result.status) {
+      throw new Error(result.message || 'Failed to send campaign');
     }
-  };
+
+    setSendResponses(result.responses || []);
+    setResponseDialogOpen(true);
+    toast.success('Campaign sent successfully!');
+    setShowCreateCampaign(false);
+
+    // Reset form
+    setCampaignName('');
+    setSelectedTemplate('');
+    setSelectedInstances([]);
+    setRecipients([{ phone: '', name: '', variables: { var1: '', var2: '', var3: '', var4: '', var5: '', var6: '', var7: '', var8: '', var9: '', var10: '' } }]);
+    setCurrentStep(1);
+    setDelayRange({ start: 3, end: 5 });
+
+  } catch (err) {
+    toast.error('Error sending campaign: ' + (err instanceof Error ? err.message : 'Unknown error'));
+  } finally {
+    setIsSending(false);
+  }
+};
 
   // Filter campaigns
   const filteredCampaigns = campaigns.filter(campaign => {
